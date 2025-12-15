@@ -1,297 +1,159 @@
-# Section Checker
+# Deco Section Validator
 
-Script para validar se todas as ocorrências de Sections e Loaders (em blocos e
-páginas) estão com estrutura de dados compatível com suas tipagens TypeScript.
+A TypeScript validator for Deco CMS section configurations. This tool validates
+JSON configuration files in `.deco/blocks/` against their corresponding
+TypeScript section definitions.
 
-## Como usar
+## Overview
 
-### Validar todas as sections e loaders:
+The validator performs three main checks:
+
+1. **Property Validation**: Verifies that JSON configurations match the expected
+   TypeScript prop types
+2. **Unresolved ResolveTypes**: Identifies `__resolveType` values that cannot be
+   resolved to actual section files
+3. **Unused Saved Blocks**: Finds saved blocks that are defined but never
+   referenced
+
+## Architecture
+
+The codebase is organized into the following modules:
+
+### `types.ts`
+
+Defines all TypeScript interfaces used throughout the application:
+
+- `Property`: Represents a TypeScript property with name, type, and optional
+  flag
+- `ValidationError`: Contains validation error information
+- `ValidationResult`: Result of validating a JSON file
+- `SectionInJson`: Represents a section found in JSON configuration
+
+### `type-parser.ts`
+
+Handles parsing and extraction of TypeScript type information:
+
+- **`removeComments()`**: Strips JSDoc and line comments from TypeScript code
+- **`extractObjectLiteralProperties()`**: Extracts properties from TypeScript
+  object literal types
+- **`findTypeImports()`**: Finds type imports in TypeScript files
+- **`resolveImportPath()`**: Resolves relative import paths to absolute file
+  paths
+- **`findTypeDefinition()`**: Finds interface or type definitions by name
+- **`mergeProperties()`**: Merges two property lists, with the second overriding
+  the first
+- **`resolveType()`**: Resolves a type expression (object literal, intersection,
+  or named type) to its properties
+- **`getExportDefaultFunctionProps()`**: Extracts props type from
+  `export default function` declarations
+
+### `section-finder.ts`
+
+Finds sections within JSON configuration files:
+
+- **`shouldIgnore()`**: Determines if a resolveType should be ignored (not from
+  current app)
+- **`findSectionsInJson()`**: Recursively traverses JSON to find all sections
+  with `__resolveType`
+
+### `block-manager.ts`
+
+Manages saved blocks and section file resolution:
+
+- **`isSavedBlock()`**: Checks if a resolveType refers to a saved block
+- **`isAppSection()`**: Checks if a resolveType refers to a section in the
+  current app
+- **`blockNameToFileName()`**: Converts block name to URL-encoded filename
+- **`fileNameToBlockName()`**: Converts filename back to block name
+- **`resolveTypeToPath()`**: Converts resolveType to possible file paths
+- **`getSavedBlockContent()`**: Reads content of a saved block JSON file
+- **`getSectionContent()`**: Reads content of a section TypeScript file
+
+### `validator.ts`
+
+Core validation logic:
+
+- **`isNumericIndex()`**: Checks if a property name is a numeric index (array
+  serialization artifact)
+- **`isPrimitiveType()`**: Checks if a type is primitive (doesn't need recursive
+  validation)
+- **`validateProps()`**: Recursively validates JSON properties against expected
+  TypeScript properties
+- **`validateJsonFile()`**: Main validation function that processes a JSON file
+  and all its sections
+
+### `main.ts`
+
+Entry point that orchestrates the validation process:
+
+1. Finds all JSON files in `.deco/blocks/`
+2. Validates each file
+3. Tracks used saved blocks
+4. Identifies unused saved blocks (excluding `pages-*`, `Preview`, and
+   `redirect-*` files)
+5. Reports all errors, unresolved resolveTypes, and unused blocks
+
+## How It Works
+
+### 1. Finding Sections
+
+The validator recursively traverses JSON files looking for objects with
+`__resolveType` properties. When found:
+
+- If the resolveType is from another app (starts with `website/`), it's ignored
+  but nested sections are still searched
+- If it's a saved block (no `/` or `.` in certain patterns), it's processed
+  recursively
+- If it's a section from the current app (starts with `site/`), it's validated
+
+### 2. Type Extraction
+
+For each section, the validator:
+
+1. Reads the TypeScript file based on the resolveType
+2. Finds the `export default function` declaration
+3. Extracts the props type from the function signature
+4. Resolves the type (handles object literals, intersections, and named types)
+5. If the type is imported, follows the import chain
+
+### 3. Property Validation
+
+For each property in the JSON:
+
+1. Checks if required properties are present
+2. Checks for unexpected properties
+3. For non-primitive types, recursively validates nested objects
+4. Ignores numeric indices in arrays (serialization artifacts)
+
+### 4. Saved Block Tracking
+
+- When a saved block is referenced, it's added to the `usedSavedBlocks` set
+- After processing all files, compares used blocks against available blocks
+- Blocks in `pages-*`, `Preview`, and `redirect-*` files are excluded from the
+  unused list
+
+## Usage
 
 ```bash
-deno task validate-blocks
+deno run --allow-read main.ts
 ```
 
-### Validar uma section específica:
-
-```bash
-deno task validate-blocks sections/Footer/Footer.tsx
-```
-
-ou
-
-```bash
-deno task validate-blocks sections/Category/CategoryGrid.tsx
-```
-
-Você pode usar caminho relativo ou absoluto.
-
-### Usar pasta de blocos customizada:
-
-Por padrão, o script busca os JSONs em `.deco/blocks`. Você pode especificar outro caminho:
-
-```bash
-deno task validate-blocks --blocks-dir /caminho/completo/para/jsons
-```
-
-ou
-
-```bash
-deno task validate-blocks sections/Footer/Footer.tsx --blocks-dir /outro/projeto/.deco/blocks
-```
-
-Isso permite rodar o script em um projeto e validar os blocos de outro projeto.
-
-### Flags disponíveis:
-
-#### `--include-unused-vars`
-
-**Por padrão**, o script **não** mostra warnings de propriedades não definidas na tipagem. Use esta flag para incluí-las:
-
-```bash
-deno task validate-blocks --include-unused-vars
-```
-
-ou
-
-```bash
-deno task validate-blocks sections/Footer/Footer.tsx --include-unused-vars
-```
-
-#### `--blocks-dir <caminho>`
-
-Especifica um caminho customizado para a pasta contendo os blocos JSON. Por padrão usa `.deco/blocks`:
-
-```bash
-deno task validate-blocks --blocks-dir /caminho/completo/para/jsons
-```
-
-ou combinado com outras flags:
-
-```bash
-deno task validate-blocks sections/Footer/Footer.tsx --blocks-dir /outro/projeto/.deco/blocks --include-unused-vars
-```
-
-#### `--remove-unused-vars`
-
-**⚠️ CUIDADO: Modifica arquivos JSON automaticamente!**
-
-Remove todas as propriedades que não estão definidas na tipagem:
-
-```bash
-deno task validate-blocks --remove-unused-vars
-```
-
-ou para uma section específica:
-
-```bash
-deno task validate-blocks sections/Footer/Footer.tsx --remove-unused-vars
-```
-
-O script:
-
-1. Identifica propriedades no JSON que não existem na interface `Props`
-2. Remove essas propriedades automaticamente
-3. Salva o arquivo JSON modificado
-
-**Exemplo:**
-
-Se o JSON tem:
-
-```json
-{
-  "__resolveType": "site/sections/Footer/Footer.tsx",
-  "title": "Footer",
-  "teste": "valor não usado" // <- não está na interface Props
-}
-```
-
-Após rodar `--remove-unused-vars`, o JSON fica:
-
-```json
-{
-  "__resolveType": "site/sections/Footer/Footer.tsx",
-  "title": "Footer"
-}
-```
-
-#### `--remove-unused-sections`
-
-**⚠️ CUIDADO: Deleta arquivos permanentemente!**
-
-Remove todos os arquivos de sections/loaders que não estão sendo referenciados
-em nenhum JSON:
-
-```bash
-deno task validate-blocks --remove-unused-sections
-```
-
-O script:
-
-1. Identifica sections/loaders que não têm nenhuma ocorrência nos JSONs
-2. Lista os arquivos que serão removidos
-3. Pede confirmação (digite `sim` para confirmar)
-4. Deleta os arquivos permanentemente
-
-**Exemplo de output:**
-
-```
-🗑️  Removendo sections/loaders não utilizadas...
-
-📋 15 arquivo(s) serão removidos:
-
-  - sections/Category/CategoryGrid.tsx
-  - sections/Institutional/NumbersWithImage.tsx
-  - sections/Product/ProductShelf.tsx
-  ...
-
-⚠️  Esta ação é irreversível!
-Digite 'sim' para confirmar a remoção:
-```
-
-**Nota:** Esta flag só funciona na validação completa (sem especificar arquivo),
-não funciona ao validar uma section específica.
-
-## O que faz
-
-O script:
-
-1. **Itera por todos os arquivos** em `sections/` e `loaders/`
-2. **Gera o `__resolveType`** de cada section/loader
-3. **Busca TODAS as ocorrências** desse `__resolveType` em `.deco/blocks`
-   (incluindo dentro de páginas)
-4. **Extrai a interface Props** do arquivo TypeScript
-5. **Valida profundamente** cada ocorrência contra a tipagem
-6. **Reporta erros e warnings** com caminho exato no JSON
-
-## Funcionalidades
-
-### Detecção Inteligente de Props
-
-- ✅ Segue **re-exports** (`export { default } from "./outro-arquivo"`)
-- ✅ Extrai tipo do **parâmetro do componente** exportado como default
-- ✅ Fallback para interface/type chamada **"Props"**
-- ✅ Suporta **type aliases** e **interfaces**
-- ✅ Suporta **utility types** (Omit, Pick, Partial)
-
-### Validação Profunda
-
-- ✅ Tipos primitivos: `string`, `number`, `boolean`, `null`
-- ✅ Arrays com validação de elementos
-- ✅ Objetos nested recursivamente
-- ✅ Propriedades opcionais (`?`)
-- ✅ Union types (`string | number`)
-- ✅ Tipos especiais: `ImageWidget`, `Product`, `RichText`, etc
-- ✅ Respeita anotação `@ignore` em propriedades
-- ⚠️ **Detecta propriedades extras** não definidas na tipagem (warnings)
-
-### Proteções
-
-- ✅ Ignora blocos de apps externos (vtex, commerce, shopify, etc)
-- ✅ Ignora blocos de Theme
-- ✅ Proteção contra recursão infinita em tipos circulares
-
-### Sistema de Severidade
-
-- **✅ Válido** - Bloco está correto
-- **⚠️ Warning** - Props não encontrada OU propriedades extras não definidas na
-  tipagem OU section não está sendo usada (não falha o build)
-- **❌ Erro** - Propriedades obrigatórias ausentes ou tipos incorretos (falha o
-  build)
-
-## Estrutura dos Arquivos
-
-```
-section_checker/
-├── main.ts              # Entrypoint principal
-├── type-mapper.ts       # Mapeia __resolveType para caminhos
-├── ts-parser.ts         # Parser TypeScript (extrai Props)
-├── validator.ts         # Validador recursivo de tipos
-├── validate-blocks.ts   # Orquestrador e relatório
-└── README.md           # Esta documentação
-```
-
-## Output Exemplo
-
-```
-🔍 Validando sections e loaders...
-
-✅ sections/Header/Header.tsx - 15 ocorrência(s)
-✅ sections/Footer/Footer.tsx - 1 ocorrência(s)
-
-⚠️  sections/Footer/Footer.tsx - 1 ocorrência(s), 2 warning(s)
-
-Footer.json
-
-  - propriedade não definida na tipagem (pode ser removida) (.deco/blocks/Footer.json:265)
-  - propriedade não definida na tipagem (pode ser removida) (.deco/blocks/Footer.json:273)
-
-❌ sections/Category/CategoryGrid.tsx - 1 ocorrência(s), 1 erro(s)
-
-Preview%20%2Fsections%2FCategory%2FCategoryGrid.tsx.json
-
-  - "items": propriedade obrigatória ausente (.deco/blocks/Preview%20%2Fsections%2FCategory%2FCategoryGrid.tsx.json:2)
-
-❌ sections/Sac/Stores.tsx - 2 ocorrência(s), 2 erro(s)
-
-pages-Lojas-735837.json
-
-  - esperado array, recebido object (.deco/blocks/pages-Lojas-735837.json:57)
-  - esperado array, recebido object (.deco/blocks/pages-Lojas-735837.json:73)
-
-═══════════════════════════════════════
-📊 RESUMO
-═══════════════════════════════════════
-Total de sections/loaders: 95
-Total de ocorrências: 284
-✅ Sem problemas: 85
-⚠️ Com warnings: 3
-⚠️ Não usadas: 3
-❌ Com erros: 4
-
-⚠️  Sections não usadas:
-  - sections/Example/Unused.tsx
-  - sections/Test/OldComponent.tsx
-
-❌ Sections com erros:
-  - sections/Category/CategoryGrid.tsx (1 erro(s))
-```
-
-**Nota:** O script mostra o caminho e linha do arquivo JSON no formato clicável
-(ex: `.deco/blocks/pages-Lojas-735837.json:61`). Na maioria dos terminais
-modernos (VSCode, Cursor, iTerm2), você pode clicar diretamente no link para
-abrir o arquivo na linha exata do problema.
-
-## Exemplos de Uso
-
-### Validar todas as sections
-
-```bash
-deno task validate-blocks
-```
-
-### Validar section específica durante desenvolvimento
-
-```bash
-deno task validate-blocks sections/Header/Header.tsx
-```
-
-### Validar loader específico
-
-```bash
-deno task validate-blocks loaders/Product/categoryTabs.ts
-```
-
-### Ignorar propriedades não usadas
-
-```bash
-# Todas as sections sem warnings de props extras
-deno task validate-blocks --ignore-unused-props
-
-# Section específica sem warnings de props extras
-deno task validate-blocks sections/Footer/Footer.tsx --ignore-unused-props
-```
-
-## Portabilidade
-
-Todo o código está contido na pasta `section_checker` para facilitar migração
-para outro repositório.
+The script will:
+
+- Validate all JSON files in `.deco/blocks/`
+- Report validation errors
+- List unresolved resolveTypes
+- List unused saved blocks
+
+## Error Messages
+
+- **Missing required property**: A required property is missing from the JSON
+- **Unexpected property**: A property exists in JSON but not in the TypeScript
+  definition
+- **Section not found**: A resolveType cannot be resolved to a file
+- **Saved block not found**: A saved block reference points to a non-existent
+  file
+- **Circular reference detected**: A saved block references itself (directly or
+  indirectly)
+- **Saved block should not have extra properties**: A saved block reference has
+  properties beyond `__resolveType`

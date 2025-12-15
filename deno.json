@@ -1,0 +1,5 @@
+{
+  "imports": {
+    "@deco/deco": "jsr:@deco/deco@^1.132.2"
+  }
+}
