@@ -30,61 +30,61 @@ Você pode usar caminho relativo ou absoluto.
 Por padrão, o script busca os JSONs em `.deco/blocks`. Você pode especificar outro caminho:
 
 ```bash
-deno task validate-blocks --blocks-dir /caminho/completo/para/jsons
+deno task validate-blocks -blocks /caminho/completo/para/jsons
 ```
 
 ou
 
 ```bash
-deno task validate-blocks sections/Footer/Footer.tsx --blocks-dir /outro/projeto/.deco/blocks
+deno task validate-blocks sections/Footer/Footer.tsx -blocks /outro/projeto/.deco/blocks
 ```
 
 Isso permite rodar o script em um projeto e validar os blocos de outro projeto.
 
 ### Flags disponíveis:
 
-#### `--include-unused-vars`
+#### `-unused`
 
 **Por padrão**, o script **não** mostra warnings de propriedades não definidas na tipagem. Use esta flag para incluí-las:
 
 ```bash
-deno task validate-blocks --include-unused-vars
+deno task validate-blocks -unused
 ```
 
 ou
 
 ```bash
-deno task validate-blocks sections/Footer/Footer.tsx --include-unused-vars
+deno task validate-blocks sections/Footer/Footer.tsx -unused
 ```
 
-#### `--blocks-dir <caminho>`
+#### `-blocks <caminho>` ou `-b <caminho>`
 
 Especifica um caminho customizado para a pasta contendo os blocos JSON. Por padrão usa `.deco/blocks`:
 
 ```bash
-deno task validate-blocks --blocks-dir /caminho/completo/para/jsons
+deno task validate-blocks -blocks /caminho/completo/para/jsons
 ```
 
 ou combinado com outras flags:
 
 ```bash
-deno task validate-blocks sections/Footer/Footer.tsx --blocks-dir /outro/projeto/.deco/blocks --include-unused-vars
+deno task validate-blocks sections/Footer/Footer.tsx -blocks /outro/projeto/.deco/blocks -unused
 ```
 
-#### `--remove-unused-vars`
+#### `-rm-vars`
 
 **⚠️ CUIDADO: Modifica arquivos JSON automaticamente!**
 
 Remove todas as propriedades que não estão definidas na tipagem:
 
 ```bash
-deno task validate-blocks --remove-unused-vars
+deno task validate-blocks -rm-vars
 ```
 
 ou para uma section específica:
 
 ```bash
-deno task validate-blocks sections/Footer/Footer.tsx --remove-unused-vars
+deno task validate-blocks sections/Footer/Footer.tsx -rm-vars
 ```
 
 O script:
@@ -105,7 +105,7 @@ Se o JSON tem:
 }
 ```
 
-Após rodar `--remove-unused-vars`, o JSON fica:
+Após rodar `-rm-vars`, o JSON fica:
 
 ```json
 {
@@ -114,7 +114,7 @@ Após rodar `--remove-unused-vars`, o JSON fica:
 }
 ```
 
-#### `--remove-unused-sections`
+#### `-rm-sections`
 
 **⚠️ CUIDADO: Deleta arquivos permanentemente!**
 
@@ -122,7 +122,7 @@ Remove todos os arquivos de sections/loaders que não estão sendo referenciados
 em nenhum JSON:
 
 ```bash
-deno task validate-blocks --remove-unused-sections
+deno task validate-blocks -rm-sections
 ```
 
 O script:
@@ -282,14 +282,14 @@ deno task validate-blocks sections/Header/Header.tsx
 deno task validate-blocks loaders/Product/categoryTabs.ts
 ```
 
-### Ignorar propriedades não usadas
+### Mostrar propriedades não usadas
 
 ```bash
-# Todas as sections sem warnings de props extras
-deno task validate-blocks --ignore-unused-props
+# Todas as sections com warnings de props extras
+deno task validate-blocks -unused
 
-# Section específica sem warnings de props extras
-deno task validate-blocks sections/Footer/Footer.tsx --ignore-unused-props
+# Section específica com warnings de props extras
+deno task validate-blocks sections/Footer/Footer.tsx -unused
 ```
 
 ## Portabilidade

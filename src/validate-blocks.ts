@@ -40,28 +40,29 @@ export default async function main() {
 
   // Parse argumentos
   const args = Deno.args;
-  
-  // Extrai o valor de --blocks-dir se existir
+  // Extrai o valor de -blocks ou -b se existir
   let customBlocksDir: string | undefined;
-  const blocksDirIndex = args.indexOf("--blocks-dir");
+  const blocksDirIndex = args.findIndex((arg, idx) =>
+    (arg === "-blocks" || arg === "-b") && args[idx + 1]
+  );
   if (blocksDirIndex !== -1 && args[blocksDirIndex + 1]) {
     customBlocksDir = args[blocksDirIndex + 1];
   }
-  
-  const removeUnusedVars = args.includes("--remove-unused-vars");
-  
+
+  const removeUnusedVars = args.includes("-rm-vars");
+
   const options: ValidationOptions = {
     // Se vai remover, precisa incluir os warnings para detectá-los
-    includeUnusedVars: args.includes("--include-unused-vars") || removeUnusedVars,
+    includeUnusedVars: args.includes("-unused") || removeUnusedVars,
     removeUnusedVars,
-    removeUnusedSections: args.includes("--remove-unused-sections"),
+    removeUnusedSections: args.includes("-rm-sections"),
     blocksDir: customBlocksDir,
   };
 
   if (customBlocksDir) {
     console.log(`📂 Usando pasta de blocos customizada: ${customBlocksDir}\n`);
   }
-  
+
   if (options.removeUnusedVars) {
     console.log("🧹 Modo: Remover propriedades não definidas na tipagem\n");
   }
@@ -69,10 +70,12 @@ export default async function main() {
     console.log("🗑️  Modo: Remover sections não utilizadas\n");
   }
 
-  // Remove flags dos argumentos (incluindo --blocks-dir e seu valor)
+  // Remove flags dos argumentos (incluindo -blocks/-b e seu valor)
   const fileArgs = args.filter((arg, idx) => {
-    if (arg.startsWith("--")) return false;
-    if (idx > 0 && args[idx - 1] === "--blocks-dir") return false;
+    if (arg.startsWith("-")) return false;
+    if (idx > 0 && (args[idx - 1] === "-blocks" || args[idx - 1] === "-b")) {
+      return false;
+    }
     return true;
   });
   const targetFile = fileArgs.length > 0 ? fileArgs[0] : null;
@@ -572,7 +575,8 @@ function reportResults(results: SectionValidationResult[]): boolean {
     const isSpecialSection = result.sectionFile.includes("loaders/") ||
       result.sectionFile.includes("sections/Theme/") ||
       result.sectionFile.endsWith("sections/Component.tsx") ||
-      result.sectionFile.endsWith("sections/Session.tsx");
+      result.sectionFile.endsWith("sections/Session.tsx") ||
+      result.sectionFile.endsWith("sections/Component.tsx");
 
     if (result.unused && !isSpecialSection) {
       unusedSections.push(result);
@@ -598,7 +602,7 @@ function reportResults(results: SectionValidationResult[]): boolean {
 
       // Mostra agrupado por arquivo
       for (const [jsonFile, occs] of groupedByFile) {
-        console.log(`${jsonFile}\n`);
+        console.log(`     📄 \x1b[1m${jsonFile}\x1b[0m\n`);
 
         // Itera pelas ocorrências e seus erros
         for (let occIndex = 0; occIndex < occs.length; occIndex++) {
@@ -622,10 +626,9 @@ function reportResults(results: SectionValidationResult[]): boolean {
               message = `"${propertyName}": ${error.message}`;
             }
 
-            console.log(`  - ${message}${lineInfo}`);
+            console.log(`       - ${message}${lineInfo}`);
           }
         }
-        console.log();
       }
     } else if (result.totalWarnings > 0) {
       sectionsWithWarnings.push(result);
@@ -646,7 +649,7 @@ function reportResults(results: SectionValidationResult[]): boolean {
 
       // Mostra agrupado por arquivo
       for (const [jsonFile, occs] of groupedByFile) {
-        console.log(`${jsonFile}\n`);
+        console.log(`     📄 \x1b[1m${jsonFile}\x1b[0m\n`);
 
         // Conta ocorrências da mesma propriedade para encontrar a linha correta
         const propertyOccurrences = new Map<string, number>();
@@ -665,7 +668,7 @@ function reportResults(results: SectionValidationResult[]): boolean {
               ? `"${propertyName}": ${warning.message}`
               : warning.message;
 
-            console.log(`  - ${message}${lineInfo}`);
+            console.log(`       - ${message}${lineInfo}`);
 
             // Incrementa o contador para a próxima ocorrência dessa propriedade
             propertyOccurrences.set(warning.path, occIndex + 1);
@@ -673,10 +676,6 @@ function reportResults(results: SectionValidationResult[]): boolean {
         }
         console.log();
       }
-    } else {
-      console.log(
-        `✅ ${result.sectionFile} - ${result.occurrences.length} ocorrência(s)`,
-      );
     }
   }
 
