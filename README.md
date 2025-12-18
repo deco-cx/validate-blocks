@@ -201,13 +201,14 @@ O script:
 ## Estrutura dos Arquivos
 
 ```
-section_checker/
+validate-blocks/
 ├── main.ts              # Entrypoint principal
-├── type-mapper.ts       # Mapeia __resolveType para caminhos
-├── ts-parser.ts         # Parser TypeScript (extrai Props)
-├── validator.ts         # Validador recursivo de tipos
-├── validate-blocks.ts   # Orquestrador e relatório
-└── README.md           # Esta documentação
+├── src/
+│   ├── type-mapper.ts   # Mapeia __resolveType para caminhos
+│   ├── ts-parser.ts     # Parser TypeScript (extrai Props)
+│   ├── validator.ts     # Validador recursivo de tipos
+│   └── validate-blocks.ts # Orquestrador e relatório
+└── README.md            # Esta documentação
 ```
 
 ## Output Exemplo
@@ -293,5 +294,5 @@ deno task validate-blocks sections/Footer/Footer.tsx --ignore-unused-props
 
 ## Portabilidade
 
-Todo o código está contido na pasta `section_checker` para facilitar migração
+Todo o código está organizado na pasta `src` para facilitar migração
 para outro repositório.
