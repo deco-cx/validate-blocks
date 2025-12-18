@@ -36,6 +36,7 @@ if (!import.meta.main) {
 }
 
 async function main() {
+  const start = performance.now();
   const hasDecoFolder = await Deno.stat(".deco").catch(() => false);
   if (!hasDecoFolder) {
     error("You should run this script from the root a Deco Site project.");
@@ -209,10 +210,15 @@ async function main() {
   }> = [];
   const allUsedSavedBlocks = new Set<string>();
 
-  // Validate only the filtered entries
-  for (const entry of jsonEntries) {
+  // Validate only the filtered entries in parallel
+  const validationPromises = jsonEntries.map(async (entry) => {
     const content = await Deno.readTextFile(entry.path);
-    const result = await validateJsonFile(entry.path, content);
+    return await validateJsonFile(entry.path, content);
+  });
+
+  const validationResults = await Promise.all(validationPromises);
+
+  for (const result of validationResults) {
     allErrors.push(...result.errors);
     allUnresolvedResolveTypes.push(...result.unresolvedResolveTypes);
     result.usedSavedBlocks.forEach((block) => allUsedSavedBlocks.add(block));
@@ -220,9 +226,15 @@ async function main() {
 
   // Collect usage from ALL blocks (not just the filtered ones) to check if blocks are used
   // This is important when using --blocks flag to validate only specific blocks
-  for (const entry of allJsonEntries) {
+  // Process in parallel for better performance
+  const usagePromises = allJsonEntries.map(async (entry) => {
     const content = await Deno.readTextFile(entry.path);
-    const result = await validateJsonFile(entry.path, content);
+    return await validateJsonFile(entry.path, content);
+  });
+
+  const usageResults = await Promise.all(usagePromises);
+
+  for (const result of usageResults) {
     result.usedSavedBlocks.forEach((block) => allUsedSavedBlocks.add(block));
   }
 
@@ -534,6 +546,12 @@ async function main() {
     console.table(unusedSavedBlocks);
     console.log();
   }
+  const end = performance.now();
+  console.log(
+    `Verified ${jsonEntries.length} blocks in ${
+      Math.round(end - start) / 1000
+    } seconds`,
+  );
 }
 
 main();

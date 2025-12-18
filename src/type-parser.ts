@@ -359,6 +359,9 @@ export function mergeProperties(
   return Array.from(merged.values());
 }
 
+// Cache for parsed function props to avoid re-parsing the same file
+const functionPropsCache = new Map<string, Promise<Property[] | null>>();
+
 export async function resolveType(
   content: string,
   typeExpression: string,
@@ -465,110 +468,128 @@ export async function getExportDefaultFunctionProps(
   content: string,
   filePath?: string,
 ): Promise<Property[] | null> {
-  if (content.startsWith("export {")) {
-    const importPath = content.match(/export { [^}]+ } from "([^"]+)";/)?.[1];
-    if (!importPath) {
-      return null;
-    }
-
-    const path = join(Deno.cwd(), importPath);
-    const fileContent = await Deno.readTextFile(path).catch(() => null);
-    if (!fileContent) {
-      return null;
-    }
-
-    return getExportDefaultFunctionProps(fileContent, path);
-  }
-
-  // Try multiple patterns for export default
-  let match = content.match(/export\s+default\s+function\s+\w+\s*\(([^)]+)\)/s);
-  if (!match || !match[1]) {
-    // Try arrow function: export default (props: Props) => ...
-    match = content.match(/export\s+default\s*\(([^)]+)\)\s*=>/s);
-  }
-  if (!match || !match[1]) {
-    // Try const with export default: const Component = (props: Props) => ... export default Component
-    const constMatch = content.match(/const\s+\w+\s*=\s*\(([^)]+)\)\s*=>/s);
-    if (constMatch && constMatch[1]) {
-      match = constMatch;
+  // Use cache if filePath is provided (for section files)
+  if (filePath) {
+    if (functionPropsCache.has(filePath)) {
+      return await functionPropsCache.get(filePath)!;
     }
   }
 
-  // Try export default ComponentName; and find the function definition
-  if (!match || !match[1]) {
-    const exportDefaultMatch = content.match(/export\s+default\s+(\w+)\s*;/);
-    if (exportDefaultMatch) {
-      const componentName = exportDefaultMatch[1];
+  const parseProps = async (): Promise<Property[] | null> => {
+    if (content.startsWith("export {")) {
+      const importPath = content.match(/export { [^}]+ } from "([^"]+)";/)?.[1];
+      if (!importPath) {
+        return null;
+      }
 
-      // Look for function ComponentName(...) - handle multiline parameters
-      // First try single line
-      let functionMatch = content.match(
-        new RegExp(`function\\s+${componentName}\\s*\\(([^)]+)\\)`, "s"),
-      );
-      if (!functionMatch || !functionMatch[1]) {
-        // Try multiline - find function name, then extract parameters until closing paren
-        const functionStart = content.indexOf(`function ${componentName}(`);
-        if (functionStart !== -1) {
-          const start = functionStart + `function ${componentName}(`.length;
-          let depth = 1;
-          let end = start;
-          for (let i = start; i < content.length && depth > 0; i++) {
-            if (content[i] === "(") depth++;
-            else if (content[i] === ")") {
-              depth--;
-              if (depth === 0) {
-                end = i;
-                break;
+      const path = join(Deno.cwd(), importPath);
+      const fileContent = await Deno.readTextFile(path).catch(() => null);
+      if (!fileContent) {
+        return null;
+      }
+
+      return getExportDefaultFunctionProps(fileContent, path);
+    }
+
+    // Try multiple patterns for export default
+    let match = content.match(
+      /export\s+default\s+function\s+\w+\s*\(([^)]+)\)/s,
+    );
+    if (!match || !match[1]) {
+      // Try arrow function: export default (props: Props) => ...
+      match = content.match(/export\s+default\s*\(([^)]+)\)\s*=>/s);
+    }
+    if (!match || !match[1]) {
+      // Try const with export default: const Component = (props: Props) => ... export default Component
+      const constMatch = content.match(/const\s+\w+\s*=\s*\(([^)]+)\)\s*=>/s);
+      if (constMatch && constMatch[1]) {
+        match = constMatch;
+      }
+    }
+
+    // Try export default ComponentName; and find the function definition
+    if (!match || !match[1]) {
+      const exportDefaultMatch = content.match(/export\s+default\s+(\w+)\s*;/);
+      if (exportDefaultMatch) {
+        const componentName = exportDefaultMatch[1];
+
+        // Look for function ComponentName(...) - handle multiline parameters
+        // First try single line
+        let functionMatch = content.match(
+          new RegExp(`function\\s+${componentName}\\s*\\(([^)]+)\\)`, "s"),
+        );
+        if (!functionMatch || !functionMatch[1]) {
+          // Try multiline - find function name, then extract parameters until closing paren
+          const functionStart = content.indexOf(`function ${componentName}(`);
+          if (functionStart !== -1) {
+            const start = functionStart + `function ${componentName}(`.length;
+            let depth = 1;
+            let end = start;
+            for (let i = start; i < content.length && depth > 0; i++) {
+              if (content[i] === "(") depth++;
+              else if (content[i] === ")") {
+                depth--;
+                if (depth === 0) {
+                  end = i;
+                  break;
+                }
               }
             }
+            if (depth === 0) {
+              const params = content.substring(start, end);
+              functionMatch = [params, params];
+            }
           }
-          if (depth === 0) {
-            const params = content.substring(start, end);
-            functionMatch = [params, params];
+        }
+
+        if (functionMatch && functionMatch[1]) {
+          match = functionMatch;
+        } else {
+          const constMatch = content.match(
+            new RegExp(`const\\s+${componentName}\\s*=\\s*\\(([^)]+)\\)`, "s"),
+          );
+          if (constMatch && constMatch[1]) {
+            match = constMatch;
           }
         }
       }
+    }
 
-      if (functionMatch && functionMatch[1]) {
-        match = functionMatch;
-      } else {
-        const constMatch = content.match(
-          new RegExp(`const\\s+${componentName}\\s*=\\s*\\(([^)]+)\\)`, "s"),
-        );
-        if (constMatch && constMatch[1]) {
-          match = constMatch;
-        }
+    if (!match || !match[1]) {
+      return null;
+    }
+
+    // Handle destructured parameters like { logo, links, ... }: Props
+    // or simple parameters like props: Props
+    let typeExpression: string | null = null;
+
+    // Check if it's a destructured parameter (starts with {)
+    if (match[1].trim().startsWith("{")) {
+      // Find the type annotation after the closing brace
+      const typeMatch = match[1].match(/\}:\s*(.+)$/);
+      if (typeMatch) {
+        typeExpression = typeMatch[1].trim();
+      }
+    } else {
+      // Simple parameter: props: Props
+      const firstParam = match[1].split(",").map((p) => p.trim())[0];
+      const typeMatch = firstParam.match(/:\s*(.+)$/);
+      if (typeMatch) {
+        typeExpression = typeMatch[1].trim();
       }
     }
-  }
 
-  if (!match || !match[1]) {
-    return null;
-  }
-
-  // Handle destructured parameters like { logo, links, ... }: Props
-  // or simple parameters like props: Props
-  let typeExpression: string | null = null;
-
-  // Check if it's a destructured parameter (starts with {)
-  if (match[1].trim().startsWith("{")) {
-    // Find the type annotation after the closing brace
-    const typeMatch = match[1].match(/\}:\s*(.+)$/);
-    if (typeMatch) {
-      typeExpression = typeMatch[1].trim();
+    if (!typeExpression) {
+      return null;
     }
-  } else {
-    // Simple parameter: props: Props
-    const firstParam = match[1].split(",").map((p) => p.trim())[0];
-    const typeMatch = firstParam.match(/:\s*(.+)$/);
-    if (typeMatch) {
-      typeExpression = typeMatch[1].trim();
-    }
-  }
 
-  if (!typeExpression) {
-    return null;
-  }
+    return await resolveType(content, typeExpression, filePath);
+  };
 
-  return await resolveType(content, typeExpression, filePath);
+  // Cache and return the result
+  const resultPromise = parseProps();
+  if (filePath) {
+    functionPropsCache.set(filePath, resultPromise);
+  }
+  return await resultPromise;
 }

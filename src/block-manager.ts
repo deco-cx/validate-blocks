@@ -25,6 +25,10 @@ export function isAppSection(resolveType: string): boolean {
   return resolveType.startsWith("site/");
 }
 
+// Cache for section content to avoid reading the same file multiple times
+const sectionContentCache = new Map<string, Promise<string | null>>();
+const savedBlockContentCache = new Map<string, Promise<string | null>>();
+
 export function blockNameToFileName(blockName: string): string {
   return encodeURIComponent(blockName) + ".json";
 }
@@ -70,15 +74,26 @@ export async function getSavedBlockContent(
     return null;
   }
 
+  // Check cache first
+  if (savedBlockContentCache.has(resolveType)) {
+    return await savedBlockContentCache.get(resolveType)!;
+  }
+
   const fileName = blockNameToFileName(resolveType);
   const blockPath = `.deco/blocks/${fileName}`;
 
-  try {
-    const content = await Deno.readTextFile(blockPath);
-    return content;
-  } catch {
-    return null;
-  }
+  // Create promise and cache it
+  const contentPromise = (async () => {
+    try {
+      const content = await Deno.readTextFile(blockPath);
+      return content;
+    } catch {
+      return null;
+    }
+  })();
+
+  savedBlockContentCache.set(resolveType, contentPromise);
+  return await contentPromise;
 }
 
 export async function getSectionContent(
@@ -88,16 +103,26 @@ export async function getSectionContent(
     return null;
   }
 
-  const paths = resolveTypeToPath(resolveType);
-
-  for (const path of paths) {
-    try {
-      const content = await Deno.readTextFile(path);
-      return content;
-    } catch {
-      continue;
-    }
+  // Check cache first
+  if (sectionContentCache.has(resolveType)) {
+    return await sectionContentCache.get(resolveType)!;
   }
 
-  return null;
+  const paths = resolveTypeToPath(resolveType);
+
+  // Create promise and cache it
+  const contentPromise = (async () => {
+    for (const path of paths) {
+      try {
+        const content = await Deno.readTextFile(path);
+        return content;
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  })();
+
+  sectionContentCache.set(resolveType, contentPromise);
+  return await contentPromise;
 }
