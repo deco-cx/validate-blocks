@@ -1,111 +1,111 @@
 # Section Checker
 
-Script para validar se todas as ocorrências de Sections e Loaders (em blocos e
-páginas) estão com estrutura de dados compatível com suas tipagens TypeScript.
+Script to validate that all occurrences of Sections and Loaders (in blocks and
+pages) have data structures compatible with their TypeScript types.
 
-## Como usar
+## How to use
 
-### Validar todas as sections e loaders:
+### Validate all sections and loaders:
 
 ```bash
 deno task validate-blocks
 ```
 
-### Validar uma section específica:
+### Validate a specific section:
 
 ```bash
 deno task validate-blocks sections/Footer/Footer.tsx
 ```
 
-ou
+or
 
 ```bash
 deno task validate-blocks sections/Category/CategoryGrid.tsx
 ```
 
-Você pode usar caminho relativo ou absoluto.
+You can use relative or absolute paths.
 
-### Usar pasta de blocos customizada:
+### Use custom blocks directory:
 
-Por padrão, o script busca os JSONs em `.deco/blocks`. Você pode especificar outro caminho:
-
-```bash
-deno task validate-blocks -blocks /caminho/completo/para/jsons
-```
-
-ou
+By default, the script searches for JSONs in `.deco/blocks`. You can specify another path:
 
 ```bash
-deno task validate-blocks sections/Footer/Footer.tsx -blocks /outro/projeto/.deco/blocks
+deno task validate-blocks -blocks /full/path/to/jsons
 ```
 
-Isso permite rodar o script em um projeto e validar os blocos de outro projeto.
+or
 
-### Flags disponíveis:
+```bash
+deno task validate-blocks sections/Footer/Footer.tsx -blocks /other/project/.deco/blocks
+```
+
+This allows running the script in one project and validating blocks from another project.
+
+### Available flags:
 
 #### `-unused`
 
-**Por padrão**, o script **não** mostra warnings de propriedades não definidas na tipagem. Use esta flag para incluí-las:
+**By default**, the script **does not** show warnings for properties not defined in the types. Use this flag to include them:
 
 ```bash
 deno task validate-blocks -unused
 ```
 
-ou
+or
 
 ```bash
 deno task validate-blocks sections/Footer/Footer.tsx -unused
 ```
 
-#### `-blocks <caminho>` ou `-b <caminho>`
+#### `-blocks <path>` or `-b <path>`
 
-Especifica um caminho customizado para a pasta contendo os blocos JSON. Por padrão usa `.deco/blocks`:
+Specifies a custom path for the directory containing JSON blocks. Defaults to `.deco/blocks`:
 
 ```bash
-deno task validate-blocks -blocks /caminho/completo/para/jsons
+deno task validate-blocks -blocks /full/path/to/jsons
 ```
 
-ou combinado com outras flags:
+or combined with other flags:
 
 ```bash
-deno task validate-blocks sections/Footer/Footer.tsx -blocks /outro/projeto/.deco/blocks -unused
+deno task validate-blocks sections/Footer/Footer.tsx -blocks /other/project/.deco/blocks -unused
 ```
 
 #### `-rm-vars`
 
-**⚠️ CUIDADO: Modifica arquivos JSON automaticamente!**
+**⚠️ WARNING: Automatically modifies JSON files!**
 
-Remove todas as propriedades que não estão definidas na tipagem:
+Removes all properties that are not defined in the types:
 
 ```bash
 deno task validate-blocks -rm-vars
 ```
 
-ou para uma section específica:
+or for a specific section:
 
 ```bash
 deno task validate-blocks sections/Footer/Footer.tsx -rm-vars
 ```
 
-O script:
+The script:
 
-1. Identifica propriedades no JSON que não existem na interface `Props`
-2. Remove essas propriedades automaticamente
-3. Salva o arquivo JSON modificado
+1. Identifies properties in the JSON that don't exist in the `Props` interface
+2. Removes these properties automatically
+3. Saves the modified JSON file
 
-**Exemplo:**
+**Example:**
 
-Se o JSON tem:
+If the JSON has:
 
 ```json
 {
   "__resolveType": "site/sections/Footer/Footer.tsx",
   "title": "Footer",
-  "teste": "valor não usado" // <- não está na interface Props
+  "teste": "unused value" // <- not in Props interface
 }
 ```
 
-Após rodar `-rm-vars`, o JSON fica:
+After running `-rm-vars`, the JSON becomes:
 
 ```json
 {
@@ -116,183 +116,180 @@ Após rodar `-rm-vars`, o JSON fica:
 
 #### `-rm-sections`
 
-**⚠️ CUIDADO: Deleta arquivos permanentemente!**
+**⚠️ WARNING: Permanently deletes files!**
 
-Remove todos os arquivos de sections/loaders que não estão sendo referenciados
-em nenhum JSON:
+Removes all section/loader files that are not referenced in any JSON:
 
 ```bash
 deno task validate-blocks -rm-sections
 ```
 
-O script:
+The script:
 
-1. Identifica sections/loaders que não têm nenhuma ocorrência nos JSONs
-2. Lista os arquivos que serão removidos
-3. Pede confirmação (digite `sim` para confirmar)
-4. Deleta os arquivos permanentemente
+1. Identifies sections/loaders that have no occurrences in JSONs
+2. Lists the files that will be removed
+3. Asks for confirmation (type `sim` to confirm)
+4. Permanently deletes the files
 
-**Exemplo de output:**
+**Example output:**
 
 ```
-🗑️  Removendo sections/loaders não utilizadas...
+🗑️  Removing unused sections/loaders...
 
-📋 15 arquivo(s) serão removidos:
+📋 15 file(s) will be removed:
 
   - sections/Category/CategoryGrid.tsx
   - sections/Institutional/NumbersWithImage.tsx
   - sections/Product/ProductShelf.tsx
   ...
 
-⚠️  Esta ação é irreversível!
-Digite 'sim' para confirmar a remoção:
+⚠️  This action is irreversible!
+Type 'sim' to confirm removal:
 ```
 
-**Nota:** Esta flag só funciona na validação completa (sem especificar arquivo),
-não funciona ao validar uma section específica.
+**Note:** This flag only works for full validation (without specifying a file),
+it doesn't work when validating a specific section.
 
-## O que faz
+## What it does
 
-O script:
+The script:
 
-1. **Itera por todos os arquivos** em `sections/` e `loaders/`
-2. **Gera o `__resolveType`** de cada section/loader
-3. **Busca TODAS as ocorrências** desse `__resolveType` em `.deco/blocks`
-   (incluindo dentro de páginas)
-4. **Extrai a interface Props** do arquivo TypeScript
-5. **Valida profundamente** cada ocorrência contra a tipagem
-6. **Reporta erros e warnings** com caminho exato no JSON
+1. **Iterates through all files** in `sections/` and `loaders/`
+2. **Generates the `__resolveType`** for each section/loader
+3. **Searches for ALL occurrences** of that `__resolveType` in `.deco/blocks`
+   (including inside pages)
+4. **Extracts the Props interface** from the TypeScript file
+5. **Deeply validates** each occurrence against the types
+6. **Reports errors and warnings** with exact path in the JSON
 
-## Funcionalidades
+## Features
 
-### Detecção Inteligente de Props
+### Intelligent Props Detection
 
-- ✅ Segue **re-exports** (`export { default } from "./outro-arquivo"`)
-- ✅ Extrai tipo do **parâmetro do componente** exportado como default
-- ✅ Fallback para interface/type chamada **"Props"**
-- ✅ Suporta **type aliases** e **interfaces**
-- ✅ Suporta **utility types** (Omit, Pick, Partial)
+- ✅ Follows **re-exports** (`export { default } from "./other-file"`)
+- ✅ Extracts type from the **component parameter** exported as default
+- ✅ Fallback to interface/type named **"Props"**
+- ✅ Supports **type aliases** and **interfaces**
+- ✅ Supports **utility types** (Omit, Pick, Partial)
 
-### Validação Profunda
+### Deep Validation
 
-- ✅ Tipos primitivos: `string`, `number`, `boolean`, `null`
-- ✅ Arrays com validação de elementos
-- ✅ Objetos nested recursivamente
-- ✅ Propriedades opcionais (`?`)
+- ✅ Primitive types: `string`, `number`, `boolean`, `null`
+- ✅ Arrays with element validation
+- ✅ Nested objects recursively
+- ✅ Optional properties (`?`)
 - ✅ Union types (`string | number`)
-- ✅ Tipos especiais: `ImageWidget`, `Product`, `RichText`, etc
-- ✅ Respeita anotação `@ignore` em propriedades
-- ⚠️ **Detecta propriedades extras** não definidas na tipagem (warnings)
+- ✅ Special types: `ImageWidget`, `Product`, `RichText`, etc
+- ✅ Respects `@ignore` annotation on properties
+- ⚠️ **Detects extra properties** not defined in types (warnings)
 
-### Proteções
+### Protections
 
-- ✅ Ignora blocos de apps externos (vtex, commerce, shopify, etc)
-- ✅ Ignora blocos de Theme
-- ✅ Proteção contra recursão infinita em tipos circulares
+- ✅ Ignores blocks from external apps (vtex, commerce, shopify, etc)
+- ✅ Ignores Theme blocks
+- ✅ Protection against infinite recursion in circular types
 
-### Sistema de Severidade
+### Severity System
 
-- **✅ Válido** - Bloco está correto
-- **⚠️ Warning** - Props não encontrada OU propriedades extras não definidas na
-  tipagem OU section não está sendo usada (não falha o build)
-- **❌ Erro** - Propriedades obrigatórias ausentes ou tipos incorretos (falha o
-  build)
+- **✅ Valid** - Block is correct
+- **⚠️ Warning** - Props not found OR extra properties not defined in types OR section is not being used (doesn't fail the build)
+- **❌ Error** - Required properties missing or incorrect types (fails the build)
 
-## Estrutura dos Arquivos
+## File Structure
 
 ```
 validate-blocks/
-├── main.ts              # Entrypoint principal
+├── main.ts              # Main entrypoint
 ├── src/
-│   ├── type-mapper.ts   # Mapeia __resolveType para caminhos
-│   ├── ts-parser.ts     # Parser TypeScript (extrai Props)
-│   ├── validator.ts     # Validador recursivo de tipos
-│   └── validate-blocks.ts # Orquestrador e relatório
-└── README.md            # Esta documentação
+│   ├── type-mapper.ts   # Maps __resolveType to paths
+│   ├── ts-parser.ts     # TypeScript parser (extracts Props)
+│   ├── validator.ts     # Recursive type validator
+│   └── validate-blocks.ts # Orchestrator and reporting
+└── README.md            # This documentation
 ```
 
-## Output Exemplo
+## Example Output
 
 ```
-🔍 Validando sections e loaders...
+🔍 Validating sections and loaders...
 
-✅ sections/Header/Header.tsx - 15 ocorrência(s)
-✅ sections/Footer/Footer.tsx - 1 ocorrência(s)
+✅ sections/Header/Header.tsx - 15 occurrence(s)
+✅ sections/Footer/Footer.tsx - 1 occurrence(s)
 
-⚠️  sections/Footer/Footer.tsx - 1 ocorrência(s), 2 warning(s)
+⚠️  sections/Footer/Footer.tsx - 1 occurrence(s), 2 warning(s)
 
 Footer.json
 
-  - propriedade não definida na tipagem (pode ser removida) (.deco/blocks/Footer.json:265)
-  - propriedade não definida na tipagem (pode ser removida) (.deco/blocks/Footer.json:273)
+  - property not defined in types (can be removed) (.deco/blocks/Footer.json:265)
+  - property not defined in types (can be removed) (.deco/blocks/Footer.json:273)
 
-❌ sections/Category/CategoryGrid.tsx - 1 ocorrência(s), 1 erro(s)
+❌ sections/Category/CategoryGrid.tsx - 1 occurrence(s), 1 error(s)
 
 Preview%20%2Fsections%2FCategory%2FCategoryGrid.tsx.json
 
-  - "items": propriedade obrigatória ausente (.deco/blocks/Preview%20%2Fsections%2FCategory%2FCategoryGrid.tsx.json:2)
+  - "items": required property missing (.deco/blocks/Preview%20%2Fsections%2FCategory%2FCategoryGrid.tsx.json:2)
 
-❌ sections/Sac/Stores.tsx - 2 ocorrência(s), 2 erro(s)
+❌ sections/Sac/Stores.tsx - 2 occurrence(s), 2 error(s)
 
 pages-Lojas-735837.json
 
-  - esperado array, recebido object (.deco/blocks/pages-Lojas-735837.json:57)
-  - esperado array, recebido object (.deco/blocks/pages-Lojas-735837.json:73)
+  - expected array, received object (.deco/blocks/pages-Lojas-735837.json:57)
+  - expected array, received object (.deco/blocks/pages-Lojas-735837.json:73)
 
 ═══════════════════════════════════════
-📊 RESUMO
+📊 SUMMARY
 ═══════════════════════════════════════
-Total de sections/loaders: 95
-Total de ocorrências: 284
-✅ Sem problemas: 85
-⚠️ Com warnings: 3
-⚠️ Não usadas: 3
-❌ Com erros: 4
+Total sections/loaders: 95
+Total occurrences: 284
+✅ No issues: 85
+⚠️ With warnings: 3
+⚠️ Unused: 3
+❌ With errors: 4
 
-⚠️  Sections não usadas:
+⚠️  Unused sections:
   - sections/Example/Unused.tsx
   - sections/Test/OldComponent.tsx
 
-❌ Sections com erros:
-  - sections/Category/CategoryGrid.tsx (1 erro(s))
+❌ Sections with errors:
+  - sections/Category/CategoryGrid.tsx (1 error(s))
 ```
 
-**Nota:** O script mostra o caminho e linha do arquivo JSON no formato clicável
-(ex: `.deco/blocks/pages-Lojas-735837.json:61`). Na maioria dos terminais
-modernos (VSCode, Cursor, iTerm2), você pode clicar diretamente no link para
-abrir o arquivo na linha exata do problema.
+**Note:** The script shows the path and line of the JSON file in clickable format
+(ex: `.deco/blocks/pages-Lojas-735837.json:61`). In most modern terminals
+(VSCode, Cursor, iTerm2), you can click directly on the link to
+open the file at the exact line of the problem.
 
-## Exemplos de Uso
+## Usage Examples
 
-### Validar todas as sections
+### Validate all sections
 
 ```bash
 deno task validate-blocks
 ```
 
-### Validar section específica durante desenvolvimento
+### Validate specific section during development
 
 ```bash
 deno task validate-blocks sections/Header/Header.tsx
 ```
 
-### Validar loader específico
+### Validate specific loader
 
 ```bash
 deno task validate-blocks loaders/Product/categoryTabs.ts
 ```
 
-### Mostrar propriedades não usadas
+### Show unused properties
 
 ```bash
-# Todas as sections com warnings de props extras
+# All sections with warnings for extra props
 deno task validate-blocks -unused
 
-# Section específica com warnings de props extras
+# Specific section with warnings for extra props
 deno task validate-blocks sections/Footer/Footer.tsx -unused
 ```
 
-## Portabilidade
+## Portability
 
-Todo o código está organizado na pasta `src` para facilitar migração
-para outro repositório.
+All code is organized in the `src` folder to facilitate migration
+to another repository.
