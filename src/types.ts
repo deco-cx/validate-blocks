@@ -9,6 +9,7 @@ export interface ValidationError {
   sectionPath: string;
   resolveType: string;
   errors: string[];
+  errorLine?: number; // Line number in the JSON file where the error occurs
 }
 
 export interface ValidationResult {

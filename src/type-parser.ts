@@ -370,6 +370,74 @@ export async function resolveType(
     return extractObjectLiteralProperties(typeExpression);
   }
 
+  // Handle union types (A | B)
+  // For union types with object literals, we prefer the object literal
+  if (typeExpression.includes("|")) {
+    // Split by | but be careful with nested structures
+    const parts: string[] = [];
+    let currentPart = "";
+    let depth = 0;
+    let inString = false;
+    let stringChar = "";
+
+    for (let i = 0; i < typeExpression.length; i++) {
+      const char = typeExpression[i];
+      const prevChar = i > 0 ? typeExpression[i - 1] : "";
+
+      if (!inString && (char === '"' || char === "'" || char === "`")) {
+        inString = true;
+        stringChar = char;
+        currentPart += char;
+      } else if (inString && char === stringChar && prevChar !== "\\") {
+        inString = false;
+        currentPart += char;
+      } else if (!inString) {
+        if (char === "{") {
+          depth++;
+          currentPart += char;
+        } else if (char === "}") {
+          depth--;
+          currentPart += char;
+        } else if (char === "|" && depth === 0) {
+          parts.push(currentPart.trim());
+          currentPart = "";
+        } else {
+          currentPart += char;
+        }
+      } else {
+        currentPart += char;
+      }
+    }
+    if (currentPart.trim()) {
+      parts.push(currentPart.trim());
+    }
+
+    // Look for object literal first (most specific)
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (trimmed.startsWith("{")) {
+        const props = extractObjectLiteralProperties(trimmed);
+        if (props && props.length > 0) {
+          return props;
+        }
+      }
+    }
+
+    // If no object literal found, try to resolve the first named type
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed.startsWith("{")) {
+        const typeName = trimmed;
+        const props = await findTypeDefinition(content, typeName, currentFile);
+        if (props) {
+          return props;
+        }
+      }
+    }
+
+    return null;
+  }
+
   if (typeExpression.includes("&")) {
     const parts = typeExpression.split("&").map((p) => p.trim());
     let mergedProps: Property[] = [];
@@ -412,18 +480,95 @@ export async function getExportDefaultFunctionProps(
     return getExportDefaultFunctionProps(fileContent, path);
   }
 
-  const match = content.match(/export default function (\w+)\(([^)]+)\)/);
-  if (!match || !match[2]) {
+  // Try multiple patterns for export default
+  let match = content.match(/export\s+default\s+function\s+\w+\s*\(([^)]+)\)/s);
+  if (!match || !match[1]) {
+    // Try arrow function: export default (props: Props) => ...
+    match = content.match(/export\s+default\s*\(([^)]+)\)\s*=>/s);
+  }
+  if (!match || !match[1]) {
+    // Try const with export default: const Component = (props: Props) => ... export default Component
+    const constMatch = content.match(/const\s+\w+\s*=\s*\(([^)]+)\)\s*=>/s);
+    if (constMatch && constMatch[1]) {
+      match = constMatch;
+    }
+  }
+
+  // Try export default ComponentName; and find the function definition
+  if (!match || !match[1]) {
+    const exportDefaultMatch = content.match(/export\s+default\s+(\w+)\s*;/);
+    if (exportDefaultMatch) {
+      const componentName = exportDefaultMatch[1];
+
+      // Look for function ComponentName(...) - handle multiline parameters
+      // First try single line
+      let functionMatch = content.match(
+        new RegExp(`function\\s+${componentName}\\s*\\(([^)]+)\\)`, "s"),
+      );
+      if (!functionMatch || !functionMatch[1]) {
+        // Try multiline - find function name, then extract parameters until closing paren
+        const functionStart = content.indexOf(`function ${componentName}(`);
+        if (functionStart !== -1) {
+          const start = functionStart + `function ${componentName}(`.length;
+          let depth = 1;
+          let end = start;
+          for (let i = start; i < content.length && depth > 0; i++) {
+            if (content[i] === "(") depth++;
+            else if (content[i] === ")") {
+              depth--;
+              if (depth === 0) {
+                end = i;
+                break;
+              }
+            }
+          }
+          if (depth === 0) {
+            const params = content.substring(start, end);
+            functionMatch = [params, params];
+          }
+        }
+      }
+
+      if (functionMatch && functionMatch[1]) {
+        match = functionMatch;
+      } else {
+        const constMatch = content.match(
+          new RegExp(`const\\s+${componentName}\\s*=\\s*\\(([^)]+)\\)`, "s"),
+        );
+        if (constMatch && constMatch[1]) {
+          match = constMatch;
+        }
+      }
+    }
+  }
+
+  if (!match || !match[1]) {
     return null;
   }
 
-  const firstParam = match[2].split(",").map((p) => p.trim())[0];
-  const typeMatch = firstParam.match(/:\s*(.+)$/);
+  // Handle destructured parameters like { logo, links, ... }: Props
+  // or simple parameters like props: Props
+  let typeExpression: string | null = null;
 
-  if (!typeMatch) {
+  // Check if it's a destructured parameter (starts with {)
+  if (match[1].trim().startsWith("{")) {
+    // Find the type annotation after the closing brace
+    const typeMatch = match[1].match(/\}:\s*(.+)$/);
+    if (typeMatch) {
+      typeExpression = typeMatch[1].trim();
+    }
+  } else {
+    // Simple parameter: props: Props
+    const firstParam = match[1].split(",").map((p) => p.trim())[0];
+    const typeMatch = firstParam.match(/:\s*(.+)$/);
+    if (typeMatch) {
+      typeExpression = typeMatch[1].trim();
+    }
+  }
+
+  if (!typeExpression) {
     return null;
   }
 
-  const typeExpression = typeMatch[1].trim();
   return await resolveType(content, typeExpression, filePath);
 }
