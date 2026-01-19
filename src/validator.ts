@@ -7,7 +7,7 @@ export interface ValidationError {
 }
 
 /**
- * Valida um valor contra um schema TypeScript
+ * Validates a value against a TypeScript schema
  */
 export function validateValue(
   value: any,
@@ -17,44 +17,44 @@ export function validateValue(
 ): ValidationError[] {
   const errors: ValidationError[] = [];
 
-  // Se o valor é undefined e o schema não é opcional, erro
+  // If value is undefined and schema is not optional, it's an error
   if (value === undefined) {
     if (!schema.optional) {
       errors.push({
         path,
-        message: "propriedade obrigatória ausente",
+        message: "required property missing",
         severity: "error",
       });
     }
     return errors;
   }
 
-  // Se o schema aceita qualquer coisa, ok
+  // If schema accepts anything, it's ok
   if (schema.kind === "any") {
     return errors;
   }
 
-  // Valida primitivos
+  // Validate primitives
   if (schema.kind === "primitive") {
     return validatePrimitive(value, schema, path);
   }
 
-  // Valida arrays
+  // Validate arrays
   if (schema.kind === "array") {
     return validateArray(value, schema, path, ignoreUnusedProps);
   }
 
-  // Valida objetos
+  // Validate objects
   if (schema.kind === "object") {
     return validateObject(value, schema, path, ignoreUnusedProps);
   }
 
-  // Valida unions
+  // Validate unions
   if (schema.kind === "union") {
     return validateUnion(value, schema, path, ignoreUnusedProps);
   }
 
-  // Valida tipos especiais
+  // Validate special types
   if (schema.kind === "special") {
     return validateSpecialType(value, schema, path);
   }
@@ -63,7 +63,7 @@ export function validateValue(
 }
 
 /**
- * Valida tipos primitivos
+ * Validates primitive types
  */
 function validatePrimitive(
   value: any,
@@ -76,25 +76,25 @@ function validatePrimitive(
   if (schema.type === "string" && typeof value !== "string") {
     errors.push({
       path,
-      message: `esperado string, recebido ${actualType}`,
+      message: `expected string, got ${actualType}`,
       severity: "error",
     });
   } else if (schema.type === "number" && typeof value !== "number") {
     errors.push({
       path,
-      message: `esperado number, recebido ${actualType}`,
+      message: `expected number, got ${actualType}`,
       severity: "error",
     });
   } else if (schema.type === "boolean" && typeof value !== "boolean") {
     errors.push({
       path,
-      message: `esperado boolean, recebido ${actualType}`,
+      message: `expected boolean, got ${actualType}`,
       severity: "error",
     });
   } else if (schema.type === "null" && value !== null) {
     errors.push({
       path,
-      message: `esperado null, recebido ${actualType}`,
+      message: `expected null, got ${actualType}`,
       severity: "error",
     });
   }
@@ -103,7 +103,7 @@ function validatePrimitive(
 }
 
 /**
- * Valida arrays
+ * Validates arrays
  */
 function validateArray(
   value: any,
@@ -113,28 +113,28 @@ function validateArray(
 ): ValidationError[] {
   const errors: ValidationError[] = [];
 
-  // Se recebeu um objeto com __resolveType, é uma referência válida a um loader
-  // que deve retornar um array
+  // If received an object with __resolveType, it's a valid loader reference
+  // that should return an array
   if (
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "__resolveType" in value
   ) {
-    // Aceita como referência válida (o loader referenciado será validado separadamente)
+    // Accept as valid reference (the referenced loader will be validated separately)
     return errors;
   }
 
   if (!Array.isArray(value)) {
     errors.push({
       path,
-      message: `esperado array, recebido ${typeof value}`,
+      message: `expected array, got ${typeof value}`,
       severity: "error",
     });
     return errors;
   }
 
-  // Valida cada elemento do array
+  // Validate each array element
   if (schema.elementType) {
     value.forEach((item, index) => {
       const itemErrors = validateValue(
@@ -151,7 +151,7 @@ function validateArray(
 }
 
 /**
- * Valida objetos
+ * Validates objects
  */
 function validateObject(
   value: any,
@@ -164,7 +164,7 @@ function validateObject(
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     errors.push({
       path,
-      message: `esperado object, recebido ${
+      message: `expected object, got ${
         Array.isArray(value) ? "array" : typeof value
       }`,
       severity: "error",
@@ -172,7 +172,7 @@ function validateObject(
     return errors;
   }
 
-  // Valida cada propriedade esperada
+  // Validate each expected property
   if (schema.properties) {
     for (const [propName, propSchema] of Object.entries(schema.properties)) {
       const propPath = path ? `${path}.${propName}` : propName;
@@ -187,20 +187,20 @@ function validateObject(
       errors.push(...propErrors);
     }
 
-    // Verifica propriedades extras (não definidas no schema) - apenas se não estiver ignorando
+    // Check for extra properties (not defined in schema) - only if not ignoring
     if (!ignoreUnusedProps) {
       for (const key of Object.keys(value)) {
-        // Ignora propriedades especiais do sistema
+        // Ignore system special properties
         if (key.startsWith("__")) {
           continue;
         }
 
-        // Se a propriedade não existe no schema, é um warning
+        // If property doesn't exist in schema, it's a warning
         if (!(key in schema.properties)) {
           const propPath = path ? `${path}.${key}` : key;
           errors.push({
             path: propPath,
-            message: "propriedade não definida na tipagem (pode ser removida)",
+            message: "property not defined in type (can be removed)",
             severity: "warning",
           });
         }
@@ -212,7 +212,7 @@ function validateObject(
 }
 
 /**
- * Valida union types
+ * Validates union types
  */
 function validateUnion(
   value: any,
@@ -224,16 +224,16 @@ function validateUnion(
     return [];
   }
 
-  // Tenta validar contra cada tipo da união
-  // Se pelo menos um tipo for válido, ok
+  // Try to validate against each type in the union
+  // If at least one type is valid, it's ok
   for (const unionType of schema.unionTypes) {
     const errors = validateValue(value, unionType, path, ignoreUnusedProps);
     if (errors.length === 0) {
-      return []; // Válido para este tipo da união
+      return []; // Valid for this union type
     }
   }
 
-  // Se nenhum tipo da união foi válido, retorna erro
+  // If no union type was valid, return error
   const unionTypeNames = schema.unionTypes
     .map((t) => {
       if (t.kind === "primitive") return t.type;
@@ -246,14 +246,14 @@ function validateUnion(
     {
       path,
       message:
-        `valor não corresponde a nenhum tipo da união (${unionTypeNames})`,
+        `value does not match any type in union (${unionTypeNames})`,
       severity: "error",
     },
   ];
 }
 
 /**
- * Valida tipos especiais (ImageWidget, Product, etc)
+ * Validates special types (ImageWidget, Product, etc)
  */
 function validateSpecialType(
   value: any,
@@ -268,31 +268,31 @@ function validateSpecialType(
     case "Color":
     case "DateWidget":
     case "DateTimeWidget":
-      // Todos esses são validados como strings
+      // All these are validated as strings
       if (typeof value !== "string") {
         errors.push({
           path,
           message:
-            `esperado ${schema.specialType} (string), recebido ${typeof value}`,
+            `expected ${schema.specialType} (string), got ${typeof value}`,
           severity: "error",
         });
       }
       break;
 
     case "Product":
-      // Valida estrutura básica de Product
+      // Validate basic Product structure
       if (typeof value !== "object" || value === null) {
         errors.push({
           path,
-          message: `esperado Product (object), recebido ${typeof value}`,
+          message: `expected Product (object), got ${typeof value}`,
           severity: "error",
         });
       } else {
-        // Valida campos obrigatórios básicos
+        // Validate required basic fields
         if (!value.productID && !value.sku) {
           errors.push({
             path: `${path}.productID`,
-            message: "Product deve ter productID ou sku",
+            message: "Product must have productID or sku",
             severity: "error",
           });
         }
@@ -300,20 +300,20 @@ function validateSpecialType(
       break;
 
     case "ProductListingPage":
-      // Valida estrutura básica
+      // Validate basic structure
       if (typeof value !== "object" || value === null) {
         errors.push({
           path,
           message:
-            `esperado ProductListingPage (object), recebido ${typeof value}`,
+            `expected ProductListingPage (object), got ${typeof value}`,
           severity: "error",
         });
       } else {
-        // Valida que tem produtos
+        // Validate that it has products
         if (!Array.isArray(value.products)) {
           errors.push({
             path: `${path}.products`,
-            message: "ProductListingPage deve ter array products",
+            message: "ProductListingPage must have products array",
             severity: "error",
           });
         }
@@ -321,20 +321,20 @@ function validateSpecialType(
       break;
 
     case "ProductDetailsPage":
-      // Valida estrutura básica
+      // Validate basic structure
       if (typeof value !== "object" || value === null) {
         errors.push({
           path,
           message:
-            `esperado ProductDetailsPage (object), recebido ${typeof value}`,
+            `expected ProductDetailsPage (object), got ${typeof value}`,
           severity: "error",
         });
       } else {
-        // Valida que tem product
+        // Validate that it has product
         if (!value.product) {
           errors.push({
             path: `${path}.product`,
-            message: "ProductDetailsPage deve ter product",
+            message: "ProductDetailsPage must have product",
             severity: "error",
           });
         }
@@ -342,7 +342,7 @@ function validateSpecialType(
       break;
 
     default:
-      // Tipo especial desconhecido, aceita qualquer coisa
+      // Unknown special type, accept anything
       break;
   }
 

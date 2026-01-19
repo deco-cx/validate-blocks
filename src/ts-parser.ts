@@ -3,25 +3,61 @@ import { dirname, join } from "https://deno.land/std@0.208.0/path/mod.ts";
 
 export interface TypeSchema {
   kind: "primitive" | "array" | "object" | "union" | "any" | "special";
-  type?: string; // Para primitivos: "string", "number", "boolean", "null"
+  type?: string; // For primitives: "string", "number", "boolean", "null"
   optional?: boolean;
-  elementType?: TypeSchema; // Para arrays
-  properties?: Record<string, TypeSchema>; // Para objetos
-  unionTypes?: TypeSchema[]; // Para unions
-  specialType?: string; // Para tipos especiais: "ImageWidget", "Product", etc
+  elementType?: TypeSchema; // For arrays
+  properties?: Record<string, TypeSchema>; // For objects
+  unionTypes?: TypeSchema[]; // For unions
+  specialType?: string; // For special types: "ImageWidget", "Product", etc
 }
 
-// Set para rastrear tipos sendo processados (evita recursão infinita)
+// Set to track types being processed (prevents infinite recursion)
 const processingTypes = new Set<string>();
 
+// Cache for import maps by projectRoot
+const importMapCache = new Map<string, Record<string, string>>();
+
 /**
- * Extrai a interface Props de um arquivo TypeScript
+ * Loads and caches the import map from deno.json
+ */
+export function loadImportMap(projectRoot: string): Record<string, string> {
+  // Return from cache if already loaded
+  if (importMapCache.has(projectRoot)) {
+    return importMapCache.get(projectRoot)!;
+  }
+
+  const denoJsonPath = join(projectRoot, "deno.json");
+  try {
+    const content = Deno.readTextFileSync(denoJsonPath);
+    const config = JSON.parse(content);
+    const imports = config.imports || {};
+    importMapCache.set(projectRoot, imports);
+    return imports;
+  } catch {
+    // If unable to read, return empty
+    importMapCache.set(projectRoot, {});
+    return {};
+  }
+}
+
+/**
+ * Clears the import map cache (useful for tests)
+ */
+export function clearImportMapCache(): void {
+  importMapCache.clear();
+}
+
+/**
+ * Extracts the Props interface from a TypeScript file
+ * @param filePath - Absolute path to the file
+ * @param projectRoot - Project root (for resolving import map aliases)
  */
 export async function extractPropsInterface(
   filePath: string,
+  projectRoot?: string,
 ): Promise<TypeSchema | null> {
   try {
-    // Limpa o set de tipos sendo processados
+    // Clear the set of types being processed
     processingTypes.clear();
 
     const sourceCode = await Deno.readTextFile(filePath);
@@ -32,19 +68,19 @@ export async function extractPropsInterface(
       true,
     );
 
-    // Verifica se é um re-export (export { default } from "outro-arquivo")
-    const reExportPath = findReExportPath(sourceFile, filePath);
+    // Check if it's a re-export (export { default } from "other-file")
+    const reExportPath = findReExportPath(sourceFile, filePath, projectRoot);
     if (reExportPath) {
-      return await extractPropsInterface(reExportPath);
+      return await extractPropsInterface(reExportPath, projectRoot);
     }
 
-    // Primeiro, tenta encontrar o export default e extrair o tipo dos parâmetros
+    // First, try to find the default export and extract the parameter type
     const defaultExportType = findDefaultExportParamType(sourceFile, filePath);
     if (defaultExportType) {
       return defaultExportType;
     }
 
-    // Fallback: procura por interface/type chamada Props
+    // Fallback: look for interface/type called Props
     let propsInterface: ts.InterfaceDeclaration | null = null;
     let propsType: ts.TypeAliasDeclaration | null = null;
 
@@ -77,23 +113,25 @@ export async function extractPropsInterface(
 
     return null;
   } catch (error) {
-    console.error(`Erro ao processar ${filePath}:`, error.message);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Error processing ${filePath}:`, message);
     return null;
   }
 }
 
 /**
- * Detecta se o arquivo é um re-export e retorna o caminho do arquivo de origem
+ * Detects if the file is a re-export and returns the path of the source file
  */
 function findReExportPath(
   sourceFile: ts.SourceFile,
   currentFilePath: string,
+  projectRoot?: string,
 ): string | null {
   let reExportPath: string | null = null;
 
   function visit(node: ts.Node) {
-    // Detecta: export { default } from "./caminho"
-    // ou: export { default, loader } from "./caminho"
+    // Detects: export { default } from "./path"
+    // or: export { default, loader } from "./path"
     if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
       const hasDefaultExport = node.exportClause &&
         ts.isNamedExports(node.exportClause) &&
@@ -101,7 +139,7 @@ function findReExportPath(
 
       if (hasDefaultExport && ts.isStringLiteral(node.moduleSpecifier)) {
         const importPath = node.moduleSpecifier.text;
-        reExportPath = resolveImportPath(importPath, currentFilePath);
+        reExportPath = resolveImportPath(importPath, currentFilePath, projectRoot);
       }
     }
 
@@ -113,39 +151,85 @@ function findReExportPath(
 }
 
 /**
- * Resolve um caminho de import relativo para caminho absoluto
+ * Resolves an import path to an absolute path
+ * Supports:
+ * - Relative paths: "./foo", "../bar"
+ * - Deno import map aliases: "$store/", "apps/", "site/"
  */
-function resolveImportPath(
+export function resolveImportPath(
   importPath: string,
   currentFilePath: string,
+  projectRoot?: string,
 ): string {
-  const currentDir = dirname(currentFilePath);
-  const resolvedPath = join(currentDir, importPath);
-
-  // Adiciona extensões se não tiver
+  // Extensions to try when file has no extension
   const extensions = [".tsx", ".ts", ".jsx", ".js"];
 
-  try {
-    Deno.statSync(resolvedPath);
-    return resolvedPath;
-  } catch {
-    // Tenta adicionar extensões
-    for (const ext of extensions) {
-      try {
-        const pathWithExt = resolvedPath + ext;
-        Deno.statSync(pathWithExt);
-        return pathWithExt;
-      } catch {
-        // Continua tentando
+  // Helper function to resolve file extension
+  const resolveExtension = (path: string): string => {
+    try {
+      Deno.statSync(path);
+      return path;
+    } catch {
+      // Try adding extensions
+      for (const ext of extensions) {
+        try {
+          const pathWithExt = path + ext;
+          Deno.statSync(pathWithExt);
+          return pathWithExt;
+        } catch {
+          // Continue trying
+        }
+      }
+    }
+    return path;
+  };
+
+  // Check if it's a relative path
+  if (importPath.startsWith("./") || importPath.startsWith("../")) {
+    const currentDir = dirname(currentFilePath);
+    const resolvedPath = join(currentDir, importPath);
+    return resolveExtension(resolvedPath);
+  }
+
+  // If we have projectRoot, try to resolve via import map
+  if (projectRoot) {
+    const importMap = loadImportMap(projectRoot);
+
+    // Sort aliases by descending length to avoid partial matches
+    // Ex: "$store/islands/" should be checked before "$store/"
+    const sortedAliases = Object.keys(importMap).sort(
+      (a, b) => b.length - a.length
+    );
+
+    for (const alias of sortedAliases) {
+      if (importPath.startsWith(alias)) {
+        const target = importMap[alias];
+        const relativePart = importPath.slice(alias.length);
+
+        // Only resolve local aliases (starting with "./" or "../")
+        // Ignore external URLs (http://, https://, npm:, jsr:, etc)
+        if (target.startsWith("./") || target.startsWith("../")) {
+          const resolvedTarget = join(projectRoot, target);
+          const fullPath = join(resolvedTarget, relativePart);
+          return resolveExtension(fullPath);
+        }
+
+        // For external URLs, we can't resolve locally
+        // Return original path so caller knows it failed
+        break;
       }
     }
   }
 
-  return resolvedPath;
+  // If couldn't resolve as alias and it's not relative,
+  // try as relative path to current directory (old fallback)
+  const currentDir = dirname(currentFilePath);
+  const resolvedPath = join(currentDir, importPath);
+  return resolveExtension(resolvedPath);
 }
 
 /**
- * Encontra o export default e extrai o tipo dos parâmetros
+ * Finds the default export and extracts the parameter type
  */
 function findDefaultExportParamType(
   sourceFile: ts.SourceFile,
@@ -153,7 +237,7 @@ function findDefaultExportParamType(
 ): TypeSchema | null {
   let defaultExport: ts.Node | null = null;
 
-  // Procura pelo export default
+  // Look for default export
   function visit(node: ts.Node) {
     // export default function Component(props: Type) {}
     if (
@@ -166,14 +250,14 @@ function findDefaultExportParamType(
       defaultExport = node;
     }
 
-    // export default Component (referência a uma função)
+    // export default Component (reference to a function)
     if (
       ts.isExportAssignment(node) &&
       !node.isExportEquals &&
       ts.isIdentifier(node.expression)
     ) {
       const exportedName = node.expression.text;
-      // Busca a função/const exportada
+      // Find the exported function/const
       const declaration = findDeclarationByName(exportedName, sourceFile);
       if (declaration) {
         defaultExport = declaration;
@@ -189,12 +273,12 @@ function findDefaultExportParamType(
     return null;
   }
 
-  // Extrai o tipo do primeiro parâmetro
+  // Extract the type of the first parameter
   return extractFirstParamType(defaultExport, sourceFile, filePath);
 }
 
 /**
- * Encontra uma declaração (função, const, etc) por nome
+ * Finds a declaration (function, const, etc) by name
  */
 function findDeclarationByName(
   name: string,
@@ -221,7 +305,7 @@ function findDeclarationByName(
 }
 
 /**
- * Extrai o tipo do primeiro parâmetro de uma função/componente
+ * Extracts the type of the first parameter of a function/component
  */
 function extractFirstParamType(
   node: ts.Node,
@@ -235,7 +319,7 @@ function extractFirstParamType(
     parameters = node.parameters;
   }
 
-  // Variable declaration com arrow function ou function expression
+  // Variable declaration with arrow function or function expression
   if (ts.isVariableDeclaration(node) && node.initializer) {
     if (
       ts.isArrowFunction(node.initializer) ||
@@ -258,7 +342,7 @@ function extractFirstParamType(
 }
 
 /**
- * Constrói o schema de validação a partir da interface
+ * Builds the validation schema from the interface
  */
 function buildValidationSchema(
   interfaceDecl: ts.InterfaceDeclaration,
@@ -267,7 +351,7 @@ function buildValidationSchema(
 ): TypeSchema {
   const properties: Record<string, TypeSchema> = {};
 
-  // Processa herança (extends)
+  // Process inheritance (extends)
   if (interfaceDecl.heritageClauses) {
     for (const clause of interfaceDecl.heritageClauses) {
       for (const type of clause.types) {
@@ -290,15 +374,15 @@ function buildValidationSchema(
     }
   }
 
-  // Processa membros da interface
+  // Process interface members
   for (const member of interfaceDecl.members) {
     if (ts.isPropertySignature(member) && member.name) {
-      // Verifica se a propriedade tem @ignore nos comentários JSDoc
+      // Check if property has @ignore in JSDoc comments
       const jsDocTags = ts.getJSDocTags(member);
       const hasIgnore = jsDocTags.some((tag) => tag.tagName.text === "ignore");
 
       if (hasIgnore) {
-        continue; // Pula propriedades marcadas com @ignore
+        continue; // Skip properties marked with @ignore
       }
 
       const propertyName = member.name.getText(sourceFile);
@@ -320,7 +404,7 @@ function buildValidationSchema(
 }
 
 /**
- * Resolve um nó de tipo TypeScript para um TypeSchema
+ * Resolves a TypeScript type node to a TypeSchema
  */
 function resolveTypeNode(
   typeNode: ts.TypeNode | undefined,
@@ -332,7 +416,7 @@ function resolveTypeNode(
     return { kind: "any", optional };
   }
 
-  // Proteção contra recursão infinita
+  // Protection against infinite recursion
   const typeKey = typeNode.getText(sourceFile);
   if (processingTypes.has(typeKey)) {
     return { kind: "any", optional };
@@ -380,7 +464,7 @@ function resolveTypeNode(
     if (ts.isTypeReferenceNode(typeNode)) {
       const typeName = typeNode.typeName.getText(sourceFile);
 
-      // Tipos especiais conhecidos
+      // Known special types
       const specialTypes = [
         "ImageWidget",
         "RichText",
@@ -407,7 +491,7 @@ function resolveTypeNode(
         return resolvePartialType(typeNode, sourceFile, filePath, optional);
       }
 
-      // Tenta resolver a referência
+      // Try to resolve the reference
       const referencedInterface = resolveInterfaceByName(
         typeName,
         sourceFile,
@@ -419,12 +503,12 @@ function resolveTypeNode(
           sourceFile,
           filePath,
         );
-        // Preserva o optional da propriedade pai
+        // Preserve the optional from parent property
         schema.optional = optional;
         return schema;
       }
 
-      // Tenta resolver type alias
+      // Try to resolve type alias
       const referencedType = resolveTypeAliasByName(
         typeName,
         sourceFile,
@@ -439,23 +523,23 @@ function resolveTypeNode(
         );
       }
 
-      // Se não conseguir resolver, trata como any
+      // If unable to resolve, treat as any
       return { kind: "any", optional };
     }
 
-    // Type literal (objeto inline)
+    // Type literal (inline object)
     if (ts.isTypeLiteralNode(typeNode)) {
       const properties: Record<string, TypeSchema> = {};
       for (const member of typeNode.members) {
         if (ts.isPropertySignature(member) && member.name) {
-          // Verifica se a propriedade tem @ignore nos comentários JSDoc
+          // Check if property has @ignore in JSDoc comments
           const jsDocTags = ts.getJSDocTags(member);
           const hasIgnore = jsDocTags.some((tag) =>
             tag.tagName.text === "ignore"
           );
 
           if (hasIgnore) {
-            continue; // Pula propriedades marcadas com @ignore
+            continue; // Skip properties marked with @ignore
           }
 
           const propertyName = member.name.getText(sourceFile);
@@ -479,7 +563,7 @@ function resolveTypeNode(
 }
 
 /**
- * Resolve uma referência de interface/tipo por nome
+ * Resolves an interface/type reference by name
  */
 function resolveInterfaceByName(
   typeName: string,
@@ -505,7 +589,7 @@ function resolveInterfaceByName(
 }
 
 /**
- * Resolve uma referência de interface a partir de uma expressão
+ * Resolves an interface reference from an expression
  */
 function resolveInterfaceReference(
   expression: ts.Expression,
@@ -517,7 +601,7 @@ function resolveInterfaceReference(
 }
 
 /**
- * Resolve um type alias por nome
+ * Resolves a type alias by name
  */
 function resolveTypeAliasByName(
   typeName: string,
@@ -543,7 +627,7 @@ function resolveTypeAliasByName(
 }
 
 /**
- * Resolve o tipo Omit<T, K>
+ * Resolves the Omit<T, K> type
  */
 function resolveOmitType(
   typeNode: ts.TypeReferenceNode,
@@ -574,7 +658,7 @@ function resolveOmitType(
 }
 
 /**
- * Resolve o tipo Pick<T, K>
+ * Resolves the Pick<T, K> type
  */
 function resolvePickType(
   typeNode: ts.TypeReferenceNode,
@@ -607,7 +691,7 @@ function resolvePickType(
 }
 
 /**
- * Resolve o tipo Partial<T>
+ * Resolves the Partial<T> type
  */
 function resolvePartialType(
   typeNode: ts.TypeReferenceNode,
@@ -637,7 +721,7 @@ function resolvePartialType(
 }
 
 /**
- * Extrai chaves literais de um tipo union de literais
+ * Extracts literal keys from a union of literal types
  */
 function extractLiteralKeys(
   typeNode: ts.TypeNode,

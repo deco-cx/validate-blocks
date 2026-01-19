@@ -5,21 +5,21 @@ import { extractPropsInterface, TypeSchema } from "./ts-parser.ts";
 import { validateValue, ValidationError } from "./validator.ts";
 
 interface SectionValidationResult {
-  sectionFile: string; // Caminho relativo para exibição
-  sectionFilePath: string; // Caminho absoluto para comparação
+  sectionFile: string; // Relative path for display
+  sectionFilePath: string; // Absolute path for comparison
   resolveType: string;
   occurrences: OccurrenceValidation[];
   totalErrors: number;
   totalWarnings: number;
-  unused?: boolean; // Flag para indicar que a section não está sendo usada
+  unused?: boolean; // Flag to indicate section is not being used
 }
 
 interface OccurrenceValidation {
   jsonFile: string;
-  jsonFilePath: string; // Caminho completo do arquivo JSON
-  jsonPath: string; // Caminho dentro do JSON (ex: "sections[0]")
-  jsonContent?: string; // Conteúdo do JSON para buscar linhas
-  resolveTypeLine?: number; // Linha onde o __resolveType está
+  jsonFilePath: string; // Full path to JSON file
+  jsonPath: string; // Path within JSON (e.g. "sections[0]")
+  jsonContent?: string; // JSON content for line lookup
+  resolveTypeLine?: number; // Line where __resolveType is located
   valid: boolean;
   errors: ValidationError[];
   warnings: ValidationError[];
@@ -29,18 +29,55 @@ interface ValidationOptions {
   includeUnusedVars: boolean;
   removeUnusedVars: boolean;
   removeUnusedSections: boolean;
-  blocksDir?: string; // Caminho customizado para a pasta de blocos
+  blocksDir?: string; // Custom path for blocks folder
+  reportFile?: string; // Path for report file
+}
+
+interface ValidationReport {
+  timestamp: string;
+  projectRoot: string;
+  summary: {
+    totalSections: number;
+    totalOccurrences: number;
+    totalErrors: number;
+    totalWarnings: number;
+    sectionsWithErrors: number;
+    sectionsWithWarnings: number;
+    unusedSections: number;
+    validSections: number;
+  };
+  sectionsWithErrors: Array<{
+    file: string;
+    resolveType: string;
+    errors: Array<{
+      jsonFile: string;
+      line?: number;
+      property: string;
+      message: string;
+    }>;
+  }>;
+  sectionsWithWarnings: Array<{
+    file: string;
+    resolveType: string;
+    warnings: Array<{
+      jsonFile: string;
+      property: string;
+      message: string;
+    }>;
+  }>;
+  unusedSections: string[];
 }
 
 /**
- * Função principal que orquestra a validação
+ * Main function that orchestrates the validation
  */
 export default async function main() {
   const projectRoot = Deno.cwd();
 
-  // Parse argumentos
+  // Parse arguments
   const args = Deno.args;
-  // Extrai o valor de -blocks ou -b se existir
+
+  // Extract -blocks or -b value if present
   let customBlocksDir: string | undefined;
   const blocksDirIndex = args.findIndex((arg, idx) =>
     (arg === "-blocks" || arg === "-b") && args[idx + 1]
@@ -49,31 +86,50 @@ export default async function main() {
     customBlocksDir = args[blocksDirIndex + 1];
   }
 
+  // Extract -report or -r value if present
+  let reportFile: string | undefined;
+  const reportIndex = args.findIndex((arg, idx) =>
+    (arg === "-report" || arg === "-r") && args[idx + 1]
+  );
+  if (reportIndex !== -1 && args[reportIndex + 1]) {
+    reportFile = args[reportIndex + 1];
+  } else if (args.includes("-report") || args.includes("-r")) {
+    // If -report was passed without value, use default name
+    reportFile = "validation-report.json";
+  }
+
   const removeUnusedVars = args.includes("-rm-vars");
 
   const options: ValidationOptions = {
-    // Se vai remover, precisa incluir os warnings para detectá-los
+    // If removing, need to include warnings to detect them
     includeUnusedVars: args.includes("-unused") || removeUnusedVars,
     removeUnusedVars,
     removeUnusedSections: args.includes("-rm-sections"),
     blocksDir: customBlocksDir,
+    reportFile,
   };
 
   if (customBlocksDir) {
-    console.log(`📂 Usando pasta de blocos customizada: ${customBlocksDir}\n`);
+    console.log(`📂 Using custom blocks folder: ${customBlocksDir}\n`);
   }
 
   if (options.removeUnusedVars) {
-    console.log("🧹 Modo: Remover propriedades não definidas na tipagem\n");
+    console.log("🧹 Mode: Remove properties not defined in types\n");
   }
   if (options.removeUnusedSections) {
-    console.log("🗑️  Modo: Remover sections não utilizadas\n");
+    console.log("🗑️  Mode: Remove unused sections\n");
+  }
+  if (options.reportFile) {
+    console.log(`📄 Report will be saved to: ${options.reportFile}\n`);
   }
 
-  // Remove flags dos argumentos (incluindo -blocks/-b e seu valor)
+  // Remove flags from arguments (including -blocks/-b, -report/-r and their values)
   const fileArgs = args.filter((arg, idx) => {
     if (arg.startsWith("-")) return false;
     if (idx > 0 && (args[idx - 1] === "-blocks" || args[idx - 1] === "-b")) {
+      return false;
+    }
+    if (idx > 0 && (args[idx - 1] === "-report" || args[idx - 1] === "-r")) {
       return false;
     }
     return true;
@@ -81,8 +137,8 @@ export default async function main() {
   const targetFile = fileArgs.length > 0 ? fileArgs[0] : null;
 
   if (targetFile) {
-    // Valida apenas um arquivo específico
-    console.log(`🔍 Validando ${targetFile}...\n`);
+    // Validate only a specific file
+    console.log(`🔍 Validating ${targetFile}...\n`);
     const results = await validateSpecificFile(
       targetFile,
       projectRoot,
@@ -90,7 +146,12 @@ export default async function main() {
     );
     const hasErrors = reportResults(results);
 
-    // Executar limpezas se solicitado
+    // Generate report if requested
+    if (options.reportFile) {
+      await generateReport(results, projectRoot, options.reportFile);
+    }
+
+    // Execute cleanups if requested
     if (options.removeUnusedVars) {
       await removeUnusedPropertiesFromJsons(results);
     }
@@ -98,15 +159,20 @@ export default async function main() {
     // Exit code
     Deno.exit(hasErrors ? 1 : 0);
   } else {
-    // Valida todos os arquivos
-    console.log("🔍 Validando sections e loaders...\n");
+    // Validate all files
+    console.log("🔍 Validating sections, loaders, and actions...\n");
     const results = await validateAllSections(projectRoot, options);
     const allSectionFiles = await getAllSectionFiles(projectRoot);
     const usedSections = getUsedSections(results);
 
     const hasErrors = reportResults(results);
 
-    // Executar limpezas se solicitado
+    // Generate report if requested
+    if (options.reportFile) {
+      await generateReport(results, projectRoot, options.reportFile);
+    }
+
+    // Execute cleanups if requested
     if (options.removeUnusedVars) {
       await removeUnusedPropertiesFromJsons(results);
     }
@@ -120,7 +186,7 @@ export default async function main() {
 }
 
 /**
- * Valida um arquivo específico
+ * Validates a specific file
  */
 async function validateSpecificFile(
   targetFile: string,
@@ -129,7 +195,7 @@ async function validateSpecificFile(
 ): Promise<SectionValidationResult[]> {
   const results: SectionValidationResult[] = [];
 
-  // Resolve caminho absoluto
+  // Resolve absolute path
   let absolutePath: string;
   if (targetFile.startsWith("/")) {
     absolutePath = targetFile;
@@ -137,15 +203,15 @@ async function validateSpecificFile(
     absolutePath = join(projectRoot, targetFile);
   }
 
-  // Verifica se o arquivo existe
+  // Check if file exists
   try {
     await Deno.stat(absolutePath);
   } catch {
-    console.error(`❌ Arquivo não encontrado: ${targetFile}`);
+    console.error(`❌ File not found: ${targetFile}`);
     Deno.exit(1);
   }
 
-  // Valida o arquivo
+  // Validate the file
   const result = await validateSection(absolutePath, projectRoot, options);
   if (result) {
     results.push(result);
@@ -155,7 +221,7 @@ async function validateSpecificFile(
 }
 
 /**
- * Valida todas as sections e loaders do projeto
+ * Validates all sections and loaders in the project
  */
 async function validateAllSections(
   projectRoot: string,
@@ -163,10 +229,10 @@ async function validateAllSections(
 ): Promise<SectionValidationResult[]> {
   const results: SectionValidationResult[] = [];
 
-  // Encontra todos os arquivos de sections e loaders
+  // Find all section and loader files
   const sectionFiles = await findAllSections(projectRoot);
 
-  // Para cada section, busca ocorrências e valida
+  // For each section, find occurrences and validate
   for (const sectionFile of sectionFiles) {
     const result = await validateSection(sectionFile, projectRoot, options);
     if (result) {
@@ -178,12 +244,12 @@ async function validateAllSections(
 }
 
 /**
- * Encontra todos os arquivos de sections e loaders
+ * Finds all section, loader, and action files
  */
 async function findAllSections(projectRoot: string): Promise<string[]> {
   const files: string[] = [];
 
-  // Busca em sections/
+  // Search in sections/
   const sectionsDir = join(projectRoot, "sections");
   try {
     for await (
@@ -195,10 +261,10 @@ async function findAllSections(projectRoot: string): Promise<string[]> {
       files.push(entry.path);
     }
   } catch {
-    // Diretório não existe
+    // Directory doesn't exist
   }
 
-  // Busca em loaders/
+  // Search in loaders/
   const loadersDir = join(projectRoot, "loaders");
   try {
     for await (
@@ -210,14 +276,29 @@ async function findAllSections(projectRoot: string): Promise<string[]> {
       files.push(entry.path);
     }
   } catch {
-    // Diretório não existe
+    // Directory doesn't exist
+  }
+
+  // Search in actions/
+  const actionsDir = join(projectRoot, "actions");
+  try {
+    for await (
+      const entry of walk(actionsDir, {
+        exts: [".ts"],
+        includeDirs: false,
+      })
+    ) {
+      files.push(entry.path);
+    }
+  } catch {
+    // Directory doesn't exist
   }
 
   return files;
 }
 
 /**
- * Valida uma section/loader específica
+ * Validates a specific section/loader
  */
 async function validateSection(
   sectionFile: string,
@@ -225,15 +306,15 @@ async function validateSection(
   options: ValidationOptions,
 ): Promise<SectionValidationResult | null> {
   try {
-    // Gera o __resolveType a partir do caminho do arquivo
+    // Generate __resolveType from file path
     const resolveType = filePathToResolveType(sectionFile, projectRoot);
 
-    // Ignora Theme
+    // Ignore Theme
     if (resolveType.includes("/Theme/Theme.tsx")) {
       return null;
     }
 
-    // Ignora loaders de sistema
+    // Ignore system loaders
     const systemLoaders = [
       "loaders/user.ts",
       "loaders/icons.ts",
@@ -246,10 +327,10 @@ async function validateSection(
       return null;
     }
 
-    // Extrai a interface Props
-    const propsSchema = await extractPropsInterface(sectionFile);
+    // Extract Props interface (pass projectRoot to resolve import map aliases)
+    const propsSchema = await extractPropsInterface(sectionFile, projectRoot);
 
-    // Busca todas as ocorrências desse resolveType nos JSONs
+    // Find all occurrences of this resolveType in JSONs
     const blocksDir = options.blocksDir || join(projectRoot, ".deco", "blocks");
     const occurrences = await findOccurrencesInJsons(
       resolveType,
@@ -258,7 +339,7 @@ async function validateSection(
       options,
     );
 
-    // Se não tem ocorrências, retorna com warning
+    // If no occurrences, return with warning
     if (occurrences.length === 0) {
       return {
         sectionFile: relative(projectRoot, sectionFile),
@@ -267,11 +348,11 @@ async function validateSection(
         occurrences: [],
         totalErrors: 0,
         totalWarnings: 1,
-        unused: true, // Flag para indicar que não está sendo usada
+        unused: true, // Flag to indicate not being used
       };
     }
 
-    // Conta erros e warnings
+    // Count errors and warnings
     let totalErrors = 0;
     let totalWarnings = 0;
 
@@ -290,13 +371,14 @@ async function validateSection(
       unused: false,
     };
   } catch (error) {
-    console.error(`Erro ao processar ${sectionFile}:`, error.message);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Error processing ${sectionFile}:`, message);
     return null;
   }
 }
 
 /**
- * Busca recursivamente por ocorrências de um __resolveType em todos os JSONs
+ * Recursively searches for occurrences of a __resolveType in all JSONs
  */
 async function findOccurrencesInJsons(
   resolveType: string,
@@ -316,7 +398,7 @@ async function findOccurrencesInJsons(
       const jsonContent = await Deno.readTextFile(entry.path);
       const jsonData = JSON.parse(jsonContent);
 
-      // Busca recursivamente no JSON
+      // Search recursively in JSON
       const found = findInObject(
         jsonData,
         resolveType,
@@ -327,7 +409,7 @@ async function findOccurrencesInJsons(
 
       for (let i = 0; i < found.length; i++) {
         const occurrence = found[i];
-        // Encontra a linha do __resolveType desta ocorrência específica
+        // Find the line of __resolveType for this specific occurrence
         const resolveTypeLine = findResolveTypeLine(
           jsonContent,
           resolveType,
@@ -338,7 +420,7 @@ async function findOccurrencesInJsons(
           jsonFile: entry.path.split("/").pop() || "unknown",
           jsonFilePath: entry.path,
           jsonPath: occurrence.path,
-          jsonContent, // Passa o conteúdo para buscar linhas depois
+          jsonContent, // Pass content for line lookup later
           resolveTypeLine,
           valid: occurrence.valid,
           errors: occurrence.errors,
@@ -347,14 +429,14 @@ async function findOccurrencesInJsons(
       }
     }
   } catch {
-    // Diretório não existe
+    // Directory doesn't exist
   }
 
   return occurrences;
 }
 
 /**
- * Busca recursivamente em um objeto por __resolveType e valida
+ * Recursively searches an object for __resolveType and validates
  */
 function findInObject(
   obj: unknown,
@@ -383,7 +465,7 @@ function findInObject(
     return results;
   }
 
-  // Se encontrou o __resolveType, valida
+  // If found __resolveType, validate
   if (
     typeof obj === "object" &&
     obj !== null &&
@@ -397,7 +479,7 @@ function findInObject(
         errors: [],
         warnings: [{
           path: "Props",
-          message: "interface Props não encontrada no arquivo",
+          message: "Props interface not found in file",
           severity: "warning",
         }],
       });
@@ -406,7 +488,7 @@ function findInObject(
         obj,
         propsSchema,
         "",
-        !options.includeUnusedVars, // Inverte: se NÃO incluir, então ignora
+        !options.includeUnusedVars, // Invert: if NOT including, then ignore
       );
       const errors = allIssues.filter((issue) => issue.severity !== "warning");
       const warnings = allIssues.filter((issue) =>
@@ -422,7 +504,7 @@ function findInObject(
     }
   }
 
-  // Continua buscando recursivamente
+  // Continue searching recursively
   if (Array.isArray(obj)) {
     obj.forEach((item, index) => {
       const newPath = currentPath ? `${currentPath}[${index}]` : `[${index}]`;
@@ -449,8 +531,8 @@ function findInObject(
 }
 
 /**
- * Encontra o número da linha onde o __resolveType aparece
- * occurrenceIndex permite encontrar a N-ésima ocorrência
+ * Finds the line number where __resolveType appears
+ * occurrenceIndex allows finding the N-th occurrence
  */
 function findResolveTypeLine(
   content: string,
@@ -474,20 +556,20 @@ function findResolveTypeLine(
 }
 
 /**
- * Encontra o número da linha onde uma propriedade específica aparece no JSON
- * Para propriedades ausentes em arrays, tenta encontrar a linha do array pai
+ * Finds the line number where a specific property appears in the JSON
+ * For missing properties in arrays, tries to find the parent array line
  */
 function findPropertyLine(
   content: string,
   propertyPath: string,
   occurrenceIndex: number,
 ): number | null {
-  // Se for uma propriedade dentro de um array (ex: "awards[0].title")
-  // e a propriedade está ausente, busca pelo array pai
+  // If it's a property inside an array (e.g. "awards[0].title")
+  // and the property is missing, search for the parent array
   if (propertyPath.includes("[")) {
     const parts = propertyPath.split(".");
 
-    // Tenta primeiro buscar a propriedade específica
+    // Try first to find the specific property
     const lastPart = parts[parts.length - 1];
     const cleanProperty = lastPart.replace(/\[\d+\]/, "");
 
@@ -506,7 +588,7 @@ function findPropertyLine(
       }
     }
 
-    // Se não encontrou, busca pelo array pai (ex: "awards" de "awards[0].title")
+    // If not found, search for parent array (e.g. "awards" from "awards[0].title")
     const arrayPart = parts.find((p) => p.includes("["));
     if (arrayPart) {
       const arrayName = arrayPart.split("[")[0];
@@ -527,7 +609,7 @@ function findPropertyLine(
     return null;
   }
 
-  // Para propriedades simples
+  // For simple properties
   const parts = propertyPath.split(".");
   const lastPart = parts[parts.length - 1];
   const cleanProperty = lastPart.replace(/\[\d+\]/, "");
@@ -551,8 +633,8 @@ function findPropertyLine(
 }
 
 /**
- * Reporta os resultados da validação
- * @returns true se houver erros
+ * Reports validation results
+ * @returns true if there are errors
  */
 function reportResults(results: SectionValidationResult[]): boolean {
   let totalOccurrences = 0;
@@ -566,30 +648,28 @@ function reportResults(results: SectionValidationResult[]): boolean {
     totalOccurrences += result.occurrences.length;
     totalErrors += result.totalErrors;
 
-    // Conta warnings apenas se não for unused
+    // Count warnings only if not unused
     if (!result.unused) {
       totalWarnings += result.totalWarnings;
     }
 
-    // Ignora loaders, Theme e sections especiais (Component, Session)
-    const isSpecialSection = result.sectionFile.includes("loaders/") ||
-      result.sectionFile.includes("sections/Theme/") ||
+    // Ignore Theme and special sections (Component, Session)
+    const isSpecialSection = result.sectionFile.includes("sections/Theme/") ||
       result.sectionFile.endsWith("sections/Component.tsx") ||
-      result.sectionFile.endsWith("sections/Session.tsx") ||
-      result.sectionFile.endsWith("sections/Component.tsx");
+      result.sectionFile.endsWith("sections/Session.tsx");
 
     if (result.unused && !isSpecialSection) {
       unusedSections.push(result);
       console.log(
-        `⚠️  ${result.sectionFile} - não está sendo usada em nenhum JSON`,
+        `⚠️  ${result.sectionFile} - not used in any JSON`,
       );
     } else if (result.totalErrors > 0) {
       sectionsWithErrors.push(result);
       console.log(
-        `\n❌ ${result.sectionFile} - ${result.occurrences.length} ocorrência(s), ${result.totalErrors} erro(s)\n`,
+        `\n❌ ${result.sectionFile} - ${result.occurrences.length} occurrence(s), ${result.totalErrors} error(s)\n`,
       );
 
-      // Agrupa por arquivo JSON
+      // Group by JSON file
       const groupedByFile = new Map<string, typeof result.occurrences>();
       for (const occ of result.occurrences) {
         if (occ.errors.length > 0) {
@@ -600,29 +680,29 @@ function reportResults(results: SectionValidationResult[]): boolean {
         }
       }
 
-      // Mostra agrupado por arquivo
+      // Show grouped by file
       for (const [jsonFile, occs] of groupedByFile) {
         console.log(`     📄 \x1b[1m${jsonFile}\x1b[0m\n`);
 
-        // Itera pelas ocorrências e seus erros
+        // Iterate through occurrences and their errors
         for (let occIndex = 0; occIndex < occs.length; occIndex++) {
           const occ = occs[occIndex];
 
           for (const error of occ.errors) {
-            // Para propriedades ausentes, sempre usa a linha do __resolveType
-            // Para outros erros (tipo errado, etc), tenta encontrar a linha específica
+            // For missing properties, always use the __resolveType line
+            // For other errors (wrong type, etc), try to find the specific line
             const lineNum = occ.resolveTypeLine ?? null;
 
             const lineInfo = lineNum ? ` (${occ.jsonFilePath}:${lineNum})` : "";
 
-            // Sempre mostra qual propriedade tem o problema
+            // Always show which property has the problem
             const propertyName = error.path.replace(/^root\./, "");
             let message = error.message;
 
-            if (error.message.includes("propriedade obrigatória ausente")) {
+            if (error.message.includes("required property missing")) {
               message = `"${propertyName}": ${error.message}`;
             } else if (propertyName) {
-              // Para outros erros (tipo errado, etc), mostra: "prop": mensagem
+              // For other errors (wrong type, etc), show: "prop": message
               message = `"${propertyName}": ${error.message}`;
             }
 
@@ -633,10 +713,10 @@ function reportResults(results: SectionValidationResult[]): boolean {
     } else if (result.totalWarnings > 0) {
       sectionsWithWarnings.push(result);
       console.log(
-        `\n⚠️  ${result.sectionFile} - ${result.occurrences.length} ocorrência(s), ${result.totalWarnings} warning(s)\n`,
+        `\n⚠️  ${result.sectionFile} - ${result.occurrences.length} occurrence(s), ${result.totalWarnings} warning(s)\n`,
       );
 
-      // Agrupa por arquivo JSON
+      // Group by JSON file
       const groupedByFile = new Map<string, typeof result.occurrences>();
       for (const occ of result.occurrences) {
         if (occ.warnings.length > 0) {
@@ -647,11 +727,11 @@ function reportResults(results: SectionValidationResult[]): boolean {
         }
       }
 
-      // Mostra agrupado por arquivo
+      // Show grouped by file
       for (const [jsonFile, occs] of groupedByFile) {
         console.log(`     📄 \x1b[1m${jsonFile}\x1b[0m\n`);
 
-        // Conta ocorrências da mesma propriedade para encontrar a linha correta
+        // Count occurrences of same property to find correct line
         const propertyOccurrences = new Map<string, number>();
 
         for (const occ of occs) {
@@ -662,7 +742,7 @@ function reportResults(results: SectionValidationResult[]): boolean {
               : null;
             const lineInfo = lineNum ? ` (${occ.jsonFilePath}:${lineNum})` : "";
 
-            // Sempre mostra qual propriedade tem o problema
+            // Always show which property has the problem
             const propertyName = warning.path.replace(/^root\./, "");
             const message = propertyName
               ? `"${propertyName}": ${warning.message}`
@@ -670,7 +750,7 @@ function reportResults(results: SectionValidationResult[]): boolean {
 
             console.log(`       - ${message}${lineInfo}`);
 
-            // Incrementa o contador para a próxima ocorrência dessa propriedade
+            // Increment counter for next occurrence of this property
             propertyOccurrences.set(warning.path, occIndex + 1);
           }
         }
@@ -679,34 +759,34 @@ function reportResults(results: SectionValidationResult[]): boolean {
     }
   }
 
-  // Resumo
+  // Summary
   console.log("\n═══════════════════════════════════════");
-  console.log("📊 RESUMO");
+  console.log("📊 SUMMARY");
   console.log("═══════════════════════════════════════");
-  console.log(`Total de sections/loaders: ${results.length}`);
-  console.log(`Total de ocorrências: ${totalOccurrences}`);
+  console.log(`Total sections/loaders/actions: ${results.length}`);
+  console.log(`Total occurrences: ${totalOccurrences}`);
   console.log(
-    `✅ Sem problemas: ${
+    `✅ No issues: ${
       results.length - sectionsWithErrors.length - sectionsWithWarnings.length -
       unusedSections.length
     }`,
   );
-  console.log(`⚠️  Com warnings: ${sectionsWithWarnings.length}`);
-  console.log(`⚠️  Não usadas: ${unusedSections.length}`);
-  console.log(`❌ Com erros: ${sectionsWithErrors.length}`);
+  console.log(`⚠️  With warnings: ${sectionsWithWarnings.length}`);
+  console.log(`⚠️  Unused: ${unusedSections.length}`);
+  console.log(`❌ With errors: ${sectionsWithErrors.length}`);
 
   if (unusedSections.length > 0) {
-    console.log("\n⚠️  Sections não usadas:");
+    console.log("\n⚠️  Unused sections:");
     for (const section of unusedSections) {
       console.log(`  - ${section.sectionFile}`);
     }
   }
 
   if (sectionsWithErrors.length > 0) {
-    console.log("\n❌ Sections com erros:");
+    console.log("\n❌ Sections with errors:");
     for (const section of sectionsWithErrors) {
       console.log(
-        `  - ${section.sectionFile} (${section.totalErrors} erro(s))`,
+        `  - ${section.sectionFile} (${section.totalErrors} error(s))`,
       );
     }
   }
@@ -715,43 +795,150 @@ function reportResults(results: SectionValidationResult[]): boolean {
 }
 
 /**
- * Retorna todos os arquivos de sections/loaders do projeto
+ * Generates a JSON report file with validation results
+ */
+async function generateReport(
+  results: SectionValidationResult[],
+  projectRoot: string,
+  reportPath: string,
+): Promise<void> {
+  let totalOccurrences = 0;
+  let totalErrors = 0;
+  let totalWarnings = 0;
+  const sectionsWithErrorsList: SectionValidationResult[] = [];
+  const sectionsWithWarningsList: SectionValidationResult[] = [];
+  const unusedSectionsList: string[] = [];
+
+  for (const result of results) {
+    totalOccurrences += result.occurrences.length;
+    totalErrors += result.totalErrors;
+
+    if (!result.unused) {
+      totalWarnings += result.totalWarnings;
+    }
+
+    const isSpecialSection = result.sectionFile.includes("sections/Theme/") ||
+      result.sectionFile.endsWith("sections/Component.tsx") ||
+      result.sectionFile.endsWith("sections/Session.tsx");
+
+    if (result.unused && !isSpecialSection) {
+      unusedSectionsList.push(result.sectionFile);
+    } else if (result.totalErrors > 0) {
+      sectionsWithErrorsList.push(result);
+    } else if (result.totalWarnings > 0) {
+      sectionsWithWarningsList.push(result);
+    }
+  }
+
+  const report: ValidationReport = {
+    timestamp: new Date().toISOString(),
+    projectRoot,
+    summary: {
+      totalSections: results.length,
+      totalOccurrences,
+      totalErrors,
+      totalWarnings,
+      sectionsWithErrors: sectionsWithErrorsList.length,
+      sectionsWithWarnings: sectionsWithWarningsList.length,
+      unusedSections: unusedSectionsList.length,
+      validSections: results.length - sectionsWithErrorsList.length -
+        sectionsWithWarningsList.length - unusedSectionsList.length,
+    },
+    sectionsWithErrors: sectionsWithErrorsList.map((result) => ({
+      file: result.sectionFile,
+      resolveType: result.resolveType,
+      errors: result.occurrences.flatMap((occ) =>
+        occ.errors.map((err) => ({
+          jsonFile: occ.jsonFile,
+          line: occ.resolveTypeLine,
+          property: err.path.replace(/^root\./, ""),
+          message: err.message,
+        }))
+      ),
+    })),
+    sectionsWithWarnings: sectionsWithWarningsList.map((result) => ({
+      file: result.sectionFile,
+      resolveType: result.resolveType,
+      warnings: result.occurrences.flatMap((occ) =>
+        occ.warnings.map((warn) => ({
+          jsonFile: occ.jsonFile,
+          property: warn.path.replace(/^root\./, ""),
+          message: warn.message,
+        }))
+      ),
+    })),
+    unusedSections: unusedSectionsList,
+  };
+
+  // Resolve report path
+  const absoluteReportPath = reportPath.startsWith("/")
+    ? reportPath
+    : join(projectRoot, reportPath);
+
+  await Deno.writeTextFile(
+    absoluteReportPath,
+    JSON.stringify(report, null, 2) + "\n",
+  );
+
+  console.log(`\n📄 Report saved to: ${absoluteReportPath}`);
+}
+
+/**
+ * Returns all section/loader/action files in the project
  */
 async function getAllSectionFiles(projectRoot: string): Promise<string[]> {
   const files: string[] = [];
   const sectionsDir = join(projectRoot, "sections");
   const loadersDir = join(projectRoot, "loaders");
+  const actionsDir = join(projectRoot, "actions");
 
-  for await (const entry of walk(sectionsDir, { exts: [".tsx", ".ts"] })) {
-    if (entry.isFile) files.push(entry.path);
+  try {
+    for await (const entry of walk(sectionsDir, { exts: [".tsx", ".ts"] })) {
+      if (entry.isFile) files.push(entry.path);
+    }
+  } catch {
+    // Directory doesn't exist
   }
-  for await (const entry of walk(loadersDir, { exts: [".tsx", ".ts"] })) {
-    if (entry.isFile) files.push(entry.path);
+
+  try {
+    for await (const entry of walk(loadersDir, { exts: [".tsx", ".ts"] })) {
+      if (entry.isFile) files.push(entry.path);
+    }
+  } catch {
+    // Directory doesn't exist
+  }
+
+  try {
+    for await (const entry of walk(actionsDir, { exts: [".tsx", ".ts"] })) {
+      if (entry.isFile) files.push(entry.path);
+    }
+  } catch {
+    // Directory doesn't exist
   }
 
   return files;
 }
 
 /**
- * Retorna o conjunto de sections que estão sendo usadas
+ * Returns the set of sections that are being used
  */
 function getUsedSections(results: SectionValidationResult[]): Set<string> {
   const used = new Set<string>();
   for (const result of results) {
     if (result.occurrences.length > 0) {
-      used.add(result.sectionFilePath); // Usa o caminho absoluto
+      used.add(result.sectionFilePath); // Use absolute path
     }
   }
   return used;
 }
 
 /**
- * Remove propriedades não definidas na tipagem dos arquivos JSON
+ * Removes properties not defined in types from JSON files
  */
 async function removeUnusedPropertiesFromJsons(
   validationResults: SectionValidationResult[],
 ): Promise<void> {
-  console.log("\n🧹 Removendo propriedades não definidas...\n");
+  console.log("\n🧹 Removing properties not defined in types...\n");
 
   let totalRemoved = 0;
   const modifiedFiles = new Map<string, Record<string, unknown>>();
@@ -759,14 +946,14 @@ async function removeUnusedPropertiesFromJsons(
   for (const result of validationResults) {
     for (const occ of result.occurrences) {
       const unusedWarnings = occ.warnings.filter((w) =>
-        w.message.includes("propriedade não definida na tipagem")
+        w.message.includes("property not defined in type")
       );
 
       if (unusedWarnings.length === 0) continue;
 
       const jsonPath = occ.jsonFilePath;
 
-      // Lê o JSON se ainda não foi lido
+      // Read JSON if not already read
       if (!modifiedFiles.has(jsonPath)) {
         const content = await Deno.readTextFile(jsonPath);
         modifiedFiles.set(jsonPath, JSON.parse(content));
@@ -775,7 +962,7 @@ async function removeUnusedPropertiesFromJsons(
       const jsonData = modifiedFiles.get(jsonPath);
       if (!jsonData) continue;
 
-      // Remove cada propriedade não utilizada
+      // Remove each unused property
       for (const warning of unusedWarnings) {
         const propertyPath = warning.path.replace(/^root\./, "");
         if (
@@ -787,7 +974,7 @@ async function removeUnusedPropertiesFromJsons(
     }
   }
 
-  // Salva todos os JSONs modificados
+  // Save all modified JSONs
   for (const [jsonPath, jsonData] of modifiedFiles) {
     await Deno.writeTextFile(
       jsonPath,
@@ -796,12 +983,12 @@ async function removeUnusedPropertiesFromJsons(
   }
 
   console.log(
-    `\n✅ ${totalRemoved} propriedade(s) removida(s) de ${modifiedFiles.size} arquivo(s)\n`,
+    `\n✅ ${totalRemoved} property(s) removed from ${modifiedFiles.size} file(s)\n`,
   );
 }
 
 /**
- * Remove uma propriedade específica de um JSON, procurando pelo __resolveType
+ * Removes a specific property from a JSON, searching by __resolveType
  */
 function removePropertyFromJson(
   obj: Record<string, unknown>,
@@ -812,12 +999,12 @@ function removePropertyFromJson(
     return false;
   }
 
-  // Se encontrou o __resolveType correto, remove a propriedade navegando pelo path
+  // If found correct __resolveType, remove property by navigating path
   if (obj.__resolveType === targetResolveType) {
     return removePropertyByPath(obj, propertyPath);
   }
 
-  // Busca recursivamente
+  // Search recursively
   if (Array.isArray(obj)) {
     for (const item of obj) {
       if (typeof item === "object" && item !== null) {
@@ -852,19 +1039,19 @@ function removePropertyFromJson(
 }
 
 /**
- * Remove uma propriedade navegando pelo path (ex: "images[0].desktop")
+ * Removes a property by navigating the path (e.g. "images[0].desktop")
  */
 function removePropertyByPath(
   obj: Record<string, unknown>,
   path: string,
 ): boolean {
-  // Parse o path para navegar corretamente
-  // Ex: "images[0].desktop" -> ["images", "0", "desktop"]
+  // Parse path to navigate correctly
+  // E.g. "images[0].desktop" -> ["images", "0", "desktop"]
   const parts = path.replace(/\[(\d+)\]/g, ".$1").split(".");
 
   let current: unknown = obj;
 
-  // Navega até o penúltimo nível
+  // Navigate to the second-to-last level
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i];
 
@@ -883,7 +1070,7 @@ function removePropertyByPath(
     }
   }
 
-  // Remove a propriedade final
+  // Remove the final property
   const lastPart = parts[parts.length - 1];
 
   if (typeof current !== "object" || current === null) {
@@ -908,59 +1095,63 @@ function removePropertyByPath(
 }
 
 /**
- * Remove arquivos de sections que não estão sendo usadas
- * (Loaders são ignorados pois podem ser importados em sections)
+ * Removes section files that are not being used
+ * (Loaders and actions are ignored as they may be imported or called programmatically)
  */
 async function removeUnusedSectionFiles(
   allSectionFiles: string[],
   usedSections: Set<string>,
 ): Promise<void> {
-  console.log("\n🗑️  Removendo sections não utilizadas...\n");
+  console.log("\n🗑️  Removing unused sections...\n");
 
-  // Filtra apenas sections (não loaders, Theme, Component ou Session) não usadas
+  // Filter only unused sections (not loaders, actions, Theme, Component or Session)
   const toRemove = allSectionFiles.filter((file) => {
     const isSpecialSection = file.includes("/sections/Theme/") ||
       file.endsWith("/sections/Component.tsx") ||
       file.endsWith("/sections/Session.tsx");
+    
+    const isLoaderOrAction = file.includes("/loaders/") || file.includes("/actions/");
 
     return !usedSections.has(file) &&
       file.includes("/sections/") &&
-      !isSpecialSection;
+      !isSpecialSection &&
+      !isLoaderOrAction;
   });
 
   if (toRemove.length === 0) {
-    console.log("✅ Nenhuma section não utilizada encontrada\n");
+    console.log("✅ No unused sections found\n");
     return;
   }
 
   const projectRoot = Deno.cwd();
 
-  console.log(`📋 ${toRemove.length} arquivo(s) serão removidos:\n`);
+  console.log(`📋 ${toRemove.length} file(s) will be removed:\n`);
   for (const file of toRemove) {
     const relativePath = relative(projectRoot, file);
     console.log(`  - ${relativePath}`);
   }
 
-  // Confirma remoção
-  console.log("\n⚠️  Esta ação é irreversível!");
-  console.log("Digite 'sim' para confirmar a remoção:");
+  // Confirm removal
+  console.log("\n⚠️  This action is irreversible!");
+  console.log("Type 'yes' to confirm removal:");
 
   const buf = new Uint8Array(1024);
   const n = await Deno.stdin.read(buf);
   const confirmation = new TextDecoder().decode(buf.subarray(0, n ?? 0)).trim();
 
-  if (confirmation.toLowerCase() === "sim") {
+  if (confirmation.toLowerCase() === "yes") {
     let removed = 0;
     for (const file of toRemove) {
       try {
         await Deno.remove(file);
         removed++;
       } catch (error) {
-        console.error(`❌ Erro ao remover ${file}: ${error.message}`);
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`❌ Error removing ${file}: ${message}`);
       }
     }
-    console.log(`\n✅ ${removed} arquivo(s) removido(s)\n`);
+    console.log(`\n✅ ${removed} file(s) removed\n`);
   } else {
-    console.log("\n❌ Remoção cancelada\n");
+    console.log("\n❌ Removal cancelled\n");
   }
 }

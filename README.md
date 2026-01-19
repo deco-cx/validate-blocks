@@ -1,7 +1,20 @@
-# Section Checker
+# Validate Blocks
 
-Script to validate that all occurrences of Sections and Loaders (in blocks and
-pages) have data structures compatible with their TypeScript types.
+A Deno tool to validate that all occurrences of Sections, Loaders, and Actions 
+(in deco.cx blocks and pages) have data structures compatible with their TypeScript types.
+
+## Unused Detection Features
+
+The tool detects several types of unused code:
+
+| Type | Detection | Auto-Removal |
+|------|-----------|--------------|
+| **Unused Sections** | ✅ Detected | ✅ With `-rm-sections` |
+| **Unused Loaders** | ✅ Detected | ❌ Manual only* |
+| **Unused Actions** | ✅ Detected | ❌ Manual only* |
+| **Unused Properties** | ✅ With `-unused` | ✅ With `-rm-vars` |
+
+*Loaders and actions are not auto-removed because they may be imported dynamically or called programmatically.
 
 ## How to use
 
@@ -128,7 +141,7 @@ The script:
 
 1. Identifies sections/loaders that have no occurrences in JSONs
 2. Lists the files that will be removed
-3. Asks for confirmation (type `sim` to confirm)
+3. Asks for confirmation (type `yes` to confirm)
 4. Permanently deletes the files
 
 **Example output:**
@@ -144,7 +157,7 @@ The script:
   ...
 
 ⚠️  This action is irreversible!
-Type 'sim' to confirm removal:
+Type 'yes' to confirm removal:
 ```
 
 **Note:** This flag only works for full validation (without specifying a file),
@@ -154,23 +167,26 @@ it doesn't work when validating a specific section.
 
 The script:
 
-1. **Iterates through all files** in `sections/` and `loaders/`
-2. **Generates the `__resolveType`** for each section/loader
+1. **Iterates through all files** in `sections/`, `loaders/`, and `actions/`
+2. **Generates the `__resolveType`** for each section/loader/action
 3. **Searches for ALL occurrences** of that `__resolveType` in `.deco/blocks`
    (including inside pages)
 4. **Extracts the Props interface** from the TypeScript file
 5. **Deeply validates** each occurrence against the types
 6. **Reports errors and warnings** with exact path in the JSON
+7. **Detects unused files** that aren't referenced anywhere
 
 ## Features
 
 ### Intelligent Props Detection
 
 - ✅ Follows **re-exports** (`export { default } from "./other-file"`)
+- ✅ **Resolves Deno import aliases** from `deno.json` (`$store/`, `$home/`, `site/`, etc.)
 - ✅ Extracts type from the **component parameter** exported as default
 - ✅ Fallback to interface/type named **"Props"**
 - ✅ Supports **type aliases** and **interfaces**
 - ✅ Supports **utility types** (Omit, Pick, Partial)
+- ✅ Supports **arrow function components** and **function declarations**
 
 ### Deep Validation
 
@@ -195,17 +211,76 @@ The script:
 - **⚠️ Warning** - Props not found OR extra properties not defined in types OR section is not being used (doesn't fail the build)
 - **❌ Error** - Required properties missing or incorrect types (fails the build)
 
+#### `-report [path]` or `-r [path]`
+
+Generates a JSON report file with validation results:
+
+```bash
+# Default: creates validation-report.json
+deno task validate-blocks -report
+
+# Custom path
+deno task validate-blocks -report my-report.json
+```
+
+The report includes:
+- Summary with total counts (sections, errors, warnings, unused)
+- Detailed list of sections with errors (including file, line, property, message)
+- Detailed list of sections with warnings
+- List of unused sections
+
+**Example report structure:**
+
+```json
+{
+  "timestamp": "2024-01-15T10:30:00.000Z",
+  "projectRoot": "/path/to/project",
+  "summary": {
+    "totalSections": 133,
+    "totalOccurrences": 1606,
+    "totalErrors": 15,
+    "totalWarnings": 4,
+    "sectionsWithErrors": 5,
+    "sectionsWithWarnings": 10,
+    "unusedSections": 8,
+    "validSections": 110
+  },
+  "sectionsWithErrors": [...],
+  "sectionsWithWarnings": [...],
+  "unusedSections": [...]
+}
+```
+
 ## File Structure
 
 ```
 validate-blocks/
 ├── main.ts              # Main entrypoint
+├── deno.json            # Deno configuration and tasks
 ├── src/
 │   ├── type-mapper.ts   # Maps __resolveType to paths
 │   ├── ts-parser.ts     # TypeScript parser (extracts Props)
 │   ├── validator.ts     # Recursive type validator
 │   └── validate-blocks.ts # Orchestrator and reporting
+├── tests/
+│   ├── ts-parser_test.ts    # Tests for TypeScript parser
+│   ├── validator_test.ts    # Tests for validator
+│   ├── type-mapper_test.ts  # Tests for type mapper
+│   └── fixtures/            # Test fixtures
 └── README.md            # This documentation
+```
+
+## Running Tests
+
+```bash
+# Run all tests
+deno test -A
+
+# Run specific test file
+deno test -A tests/validator_test.ts
+
+# Run with verbose output
+deno test -A --reporter=verbose
 ```
 
 ## Example Output
@@ -239,7 +314,7 @@ pages-Lojas-735837.json
 ═══════════════════════════════════════
 📊 SUMMARY
 ═══════════════════════════════════════
-Total sections/loaders: 95
+Total sections/loaders/actions: 95
 Total occurrences: 284
 ✅ No issues: 85
 ⚠️ With warnings: 3

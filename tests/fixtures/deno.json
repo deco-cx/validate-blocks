@@ -1,0 +1,8 @@
+{
+  "imports": {
+    "$store/": "./",
+    "$home/": "./",
+    "apps/": "https://example.com/apps/",
+    "site/": "./"
+  }
+}
