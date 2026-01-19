@@ -45,6 +45,7 @@ interface ValidationReport {
     sectionsWithWarnings: number;
     unusedSections: number;
     validSections: number;
+    antiPatterns: number;
   };
   sectionsWithErrors: Array<{
     file: string;
@@ -66,6 +67,15 @@ interface ValidationReport {
     }>;
   }>;
   unusedSections: string[];
+  antiPatterns: AntiPatternIssue[];
+}
+
+interface AntiPatternIssue {
+  type: "dead-code" | "lazy-multivariate" | "nested-multivariate";
+  jsonFile: string;
+  jsonPath: string;
+  message: string;
+  line?: number;
 }
 
 /**
@@ -144,11 +154,16 @@ export default async function main() {
       projectRoot,
       options,
     );
-    const hasErrors = reportResults(results);
+
+    // Detect anti-patterns
+    const blocksDir = options.blocksDir || join(projectRoot, ".deco", "blocks");
+    const antiPatterns = await detectAntiPatterns(blocksDir);
+
+    const hasErrors = reportResults(results, antiPatterns);
 
     // Generate report if requested
     if (options.reportFile) {
-      await generateReport(results, projectRoot, options.reportFile);
+      await generateReport(results, projectRoot, options.reportFile, antiPatterns);
     }
 
     // Execute cleanups if requested
@@ -165,11 +180,15 @@ export default async function main() {
     const allSectionFiles = await getAllSectionFiles(projectRoot);
     const usedSections = getUsedSections(results);
 
-    const hasErrors = reportResults(results);
+    // Detect anti-patterns
+    const blocksDir = options.blocksDir || join(projectRoot, ".deco", "blocks");
+    const antiPatterns = await detectAntiPatterns(blocksDir);
+
+    const hasErrors = reportResults(results, antiPatterns);
 
     // Generate report if requested
     if (options.reportFile) {
-      await generateReport(results, projectRoot, options.reportFile);
+      await generateReport(results, projectRoot, options.reportFile, antiPatterns);
     }
 
     // Execute cleanups if requested
@@ -556,6 +575,148 @@ function findResolveTypeLine(
 }
 
 /**
+ * Detects anti-patterns in JSON block files
+ */
+async function detectAntiPatterns(blocksDir: string): Promise<AntiPatternIssue[]> {
+  const issues: AntiPatternIssue[] = [];
+
+  try {
+    for await (
+      const entry of walk(blocksDir, {
+        exts: [".json"],
+        includeDirs: false,
+      })
+    ) {
+      const jsonContent = await Deno.readTextFile(entry.path);
+      const jsonData = JSON.parse(jsonContent);
+      const jsonFileName = entry.path.split("/").pop() || "unknown";
+
+      // Scan the JSON recursively for anti-patterns
+      scanForAntiPatterns(jsonData, "", jsonFileName, jsonContent, issues);
+    }
+  } catch {
+    // Directory doesn't exist
+  }
+
+  return issues;
+}
+
+/**
+ * Recursively scans an object for anti-patterns
+ */
+function scanForAntiPatterns(
+  obj: unknown,
+  currentPath: string,
+  jsonFile: string,
+  jsonContent: string,
+  issues: AntiPatternIssue[],
+): void {
+  if (typeof obj !== "object" || obj === null) {
+    return;
+  }
+
+  const resolveType = (obj as Record<string, unknown>).__resolveType;
+
+  // Check for multivariate/flags sections
+  if (
+    typeof resolveType === "string" &&
+    (resolveType.includes("multivariate") || resolveType.includes("flags"))
+  ) {
+    const variants = (obj as Record<string, unknown>).variants;
+    if (Array.isArray(variants)) {
+      for (let i = 0; i < variants.length; i++) {
+        const variant = variants[i] as Record<string, unknown>;
+        const rule = variant.rule as Record<string, unknown>;
+        const value = variant.value;
+
+        // Check for 'never' matcher (dead code)
+        if (
+          rule &&
+          typeof rule.__resolveType === "string" &&
+          rule.__resolveType.toLowerCase().includes("never")
+        ) {
+          const line = findPatternLine(jsonContent, "never", currentPath);
+          issues.push({
+            type: "dead-code",
+            jsonFile,
+            jsonPath: `${currentPath}.variants[${i}]`,
+            message: `Variant with 'never' rule is dead code and will never execute`,
+            line,
+          });
+        }
+
+        // Check for Lazy wrapping multivariate (anti-pattern)
+        if (
+          value &&
+          typeof value === "object" &&
+          typeof (value as Record<string, unknown>).__resolveType === "string"
+        ) {
+          const valueResolveType = (value as Record<string, unknown>)
+            .__resolveType as string;
+
+          if (valueResolveType.includes("Lazy")) {
+            const section = (value as Record<string, unknown>).section;
+            if (
+              section &&
+              typeof section === "object" &&
+              typeof (section as Record<string, unknown>).__resolveType ===
+                "string"
+            ) {
+              const sectionResolveType = (section as Record<string, unknown>)
+                .__resolveType as string;
+              if (
+                sectionResolveType.includes("multivariate") ||
+                sectionResolveType.includes("flags")
+              ) {
+                const line = findPatternLine(jsonContent, "Lazy", currentPath);
+                issues.push({
+                  type: "lazy-multivariate",
+                  jsonFile,
+                  jsonPath: `${currentPath}.variants[${i}].value`,
+                  message: `Lazy wrapping multivariate is an anti-pattern. Multivariate should wrap Lazy, not the other way around.`,
+                  line,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Continue scanning recursively
+  if (Array.isArray(obj)) {
+    obj.forEach((item, index) => {
+      const newPath = currentPath ? `${currentPath}[${index}]` : `[${index}]`;
+      scanForAntiPatterns(item, newPath, jsonFile, jsonContent, issues);
+    });
+  } else {
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === "__resolveType") continue;
+      const newPath = currentPath ? `${currentPath}.${key}` : key;
+      scanForAntiPatterns(value, newPath, jsonFile, jsonContent, issues);
+    }
+  }
+}
+
+/**
+ * Finds the line number for a pattern in JSON content
+ */
+function findPatternLine(
+  content: string,
+  pattern: string,
+  _contextPath: string,
+): number | undefined {
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes(pattern)) {
+      return i + 1;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Finds the line number where a specific property appears in the JSON
  * For missing properties in arrays, tries to find the parent array line
  */
@@ -636,7 +797,10 @@ function findPropertyLine(
  * Reports validation results
  * @returns true if there are errors
  */
-function reportResults(results: SectionValidationResult[]): boolean {
+function reportResults(
+  results: SectionValidationResult[],
+  antiPatterns: AntiPatternIssue[] = [],
+): boolean {
   let totalOccurrences = 0;
   let totalErrors = 0;
   let totalWarnings = 0;
@@ -759,6 +923,58 @@ function reportResults(results: SectionValidationResult[]): boolean {
     }
   }
 
+  // Report anti-patterns
+  if (antiPatterns.length > 0) {
+    console.log("\n🚨 ANTI-PATTERNS DETECTED\n");
+
+    // Group by type
+    const deadCode = antiPatterns.filter((p) => p.type === "dead-code");
+    const lazyMultivariate = antiPatterns.filter(
+      (p) => p.type === "lazy-multivariate",
+    );
+    const nestedMultivariate = antiPatterns.filter(
+      (p) => p.type === "nested-multivariate",
+    );
+
+    if (deadCode.length > 0) {
+      console.log(`💀 Dead Code (${deadCode.length} sections with 'never' rule):\n`);
+      // Group by file
+      const byFile = new Map<string, AntiPatternIssue[]>();
+      for (const issue of deadCode) {
+        if (!byFile.has(issue.jsonFile)) {
+          byFile.set(issue.jsonFile, []);
+        }
+        byFile.get(issue.jsonFile)!.push(issue);
+      }
+      for (const [file, issues] of byFile) {
+        console.log(`   📄 ${file}: ${issues.length} dead code section(s)`);
+      }
+      console.log();
+    }
+
+    if (lazyMultivariate.length > 0) {
+      console.log(
+        `⚠️  Lazy wrapping Multivariate (${lazyMultivariate.length} instances):\n`,
+      );
+      for (const issue of lazyMultivariate) {
+        console.log(`   📄 ${issue.jsonFile}`);
+        console.log(`      Path: ${issue.jsonPath}`);
+        console.log(`      ${issue.message}\n`);
+      }
+    }
+
+    if (nestedMultivariate.length > 0) {
+      console.log(
+        `⚠️  Nested Multivariate (${nestedMultivariate.length} instances):\n`,
+      );
+      for (const issue of nestedMultivariate) {
+        console.log(`   📄 ${issue.jsonFile}`);
+        console.log(`      Path: ${issue.jsonPath}`);
+        console.log(`      ${issue.message}\n`);
+      }
+    }
+  }
+
   // Summary
   console.log("\n═══════════════════════════════════════");
   console.log("📊 SUMMARY");
@@ -774,6 +990,9 @@ function reportResults(results: SectionValidationResult[]): boolean {
   console.log(`⚠️  With warnings: ${sectionsWithWarnings.length}`);
   console.log(`⚠️  Unused: ${unusedSections.length}`);
   console.log(`❌ With errors: ${sectionsWithErrors.length}`);
+  if (antiPatterns.length > 0) {
+    console.log(`🚨 Anti-patterns: ${antiPatterns.length}`);
+  }
 
   if (unusedSections.length > 0) {
     console.log("\n⚠️  Unused sections:");
@@ -801,6 +1020,7 @@ async function generateReport(
   results: SectionValidationResult[],
   projectRoot: string,
   reportPath: string,
+  antiPatterns: AntiPatternIssue[] = [],
 ): Promise<void> {
   let totalOccurrences = 0;
   let totalErrors = 0;
@@ -843,6 +1063,7 @@ async function generateReport(
       unusedSections: unusedSectionsList.length,
       validSections: results.length - sectionsWithErrorsList.length -
         sectionsWithWarningsList.length - unusedSectionsList.length,
+      antiPatterns: antiPatterns.length,
     },
     sectionsWithErrors: sectionsWithErrorsList.map((result) => ({
       file: result.sectionFile,
@@ -868,6 +1089,7 @@ async function generateReport(
       ),
     })),
     unusedSections: unusedSectionsList,
+    antiPatterns,
   };
 
   // Resolve report path
@@ -1154,4 +1376,9 @@ async function removeUnusedSectionFiles(
   } else {
     console.log("\n❌ Removal cancelled\n");
   }
+}
+
+// Entry point when run directly
+if (import.meta.main) {
+  main();
 }
