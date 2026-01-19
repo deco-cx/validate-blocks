@@ -16,24 +16,50 @@ The tool detects several types of unused code:
 
 *Loaders and actions are not auto-removed because they may be imported dynamically or called programmatically.
 
-## How to use
+## How to Run
 
-### Validate all sections and loaders:
+### Run directly (recommended)
+
+No installation needed - just run from any deco site directory:
+
+```bash
+# Validate all sections, loaders, and actions
+deno run -A https://deco.cx/validate
+
+# Generate a JSON report
+deno run -A https://deco.cx/validate -report validation-report.json
+```
+
+### Add as a deno task (optional)
+
+Add to your site's `deno.json` for convenience:
+
+```json
+{
+  "tasks": {
+    "validate-blocks": "deno run -A https://deco.cx/validate"
+  }
+}
+```
+
+Then run:
 
 ```bash
 deno task validate-blocks
 ```
 
+## Usage Examples
+
+### Validate all sections, loaders, and actions:
+
+```bash
+deno run -A https://deco.cx/validate
+```
+
 ### Validate a specific section:
 
 ```bash
-deno task validate-blocks sections/Footer/Footer.tsx
-```
-
-or
-
-```bash
-deno task validate-blocks sections/Category/CategoryGrid.tsx
+deno run -A https://deco.cx/validate sections/Footer/Footer.tsx
 ```
 
 You can use relative or absolute paths.
@@ -43,13 +69,7 @@ You can use relative or absolute paths.
 By default, the script searches for JSONs in `.deco/blocks`. You can specify another path:
 
 ```bash
-deno task validate-blocks -blocks /full/path/to/jsons
-```
-
-or
-
-```bash
-deno task validate-blocks sections/Footer/Footer.tsx -blocks /other/project/.deco/blocks
+deno run -A https://deco.cx/validate -blocks /full/path/to/jsons
 ```
 
 This allows running the script in one project and validating blocks from another project.
@@ -61,13 +81,7 @@ This allows running the script in one project and validating blocks from another
 **By default**, the script **does not** show warnings for properties not defined in the types. Use this flag to include them:
 
 ```bash
-deno task validate-blocks -unused
-```
-
-or
-
-```bash
-deno task validate-blocks sections/Footer/Footer.tsx -unused
+deno run -A https://deco.cx/validate -unused
 ```
 
 #### `-blocks <path>` or `-b <path>`
@@ -75,13 +89,7 @@ deno task validate-blocks sections/Footer/Footer.tsx -unused
 Specifies a custom path for the directory containing JSON blocks. Defaults to `.deco/blocks`:
 
 ```bash
-deno task validate-blocks -blocks /full/path/to/jsons
-```
-
-or combined with other flags:
-
-```bash
-deno task validate-blocks sections/Footer/Footer.tsx -blocks /other/project/.deco/blocks -unused
+deno run -A https://deco.cx/validate -blocks /full/path/to/jsons
 ```
 
 #### `-rm-vars`
@@ -91,13 +99,7 @@ deno task validate-blocks sections/Footer/Footer.tsx -blocks /other/project/.dec
 Removes all properties that are not defined in the types:
 
 ```bash
-deno task validate-blocks -rm-vars
-```
-
-or for a specific section:
-
-```bash
-deno task validate-blocks sections/Footer/Footer.tsx -rm-vars
+deno run -A https://deco.cx/validate -rm-vars
 ```
 
 The script:
@@ -131,10 +133,10 @@ After running `-rm-vars`, the JSON becomes:
 
 **⚠️ WARNING: Permanently deletes files!**
 
-Removes all section/loader files that are not referenced in any JSON:
+Removes all section files that are not referenced in any JSON:
 
 ```bash
-deno task validate-blocks -rm-sections
+deno run -A https://deco.cx/validate -rm-sections
 ```
 
 The script:
@@ -217,10 +219,10 @@ Generates a JSON report file with validation results:
 
 ```bash
 # Default: creates validation-report.json
-deno task validate-blocks -report
+deno run -A https://deco.cx/validate -report
 
 # Custom path
-deno task validate-blocks -report my-report.json
+deno run -A https://deco.cx/validate -report my-report.json
 ```
 
 The report includes:
