@@ -3,6 +3,7 @@ import { walk } from "https://deno.land/std@0.208.0/fs/walk.ts";
 import { filePathToResolveType } from "./type-mapper.ts";
 import { extractPropsInterface, TypeSchema } from "./ts-parser.ts";
 import { validateValue, ValidationError } from "./validator.ts";
+import { analyzeImports, filterImportedFiles, reportImportAnalysis } from "./import-analyzer.ts";
 
 interface SectionValidationResult {
   sectionFile: string; // Relative path for display
@@ -1326,12 +1327,19 @@ async function removeUnusedSectionFiles(
 ): Promise<void> {
   console.log("\n🗑️  Removing unused sections...\n");
 
+  // Analyze imports first to avoid false positives
+  const projectRoot = Deno.cwd();
+  const importAnalysis = await analyzeImports(projectRoot);
+
+  console.log("🔍 Analyzing TypeScript imports...");
+  reportImportAnalysis(importAnalysis, projectRoot);
+
   // Filter only unused sections (not loaders, actions, Theme, Component or Session)
-  const toRemove = allSectionFiles.filter((file) => {
+  let candidateFiles = allSectionFiles.filter((file) => {
     const isSpecialSection = file.includes("/sections/Theme/") ||
       file.endsWith("/sections/Component.tsx") ||
       file.endsWith("/sections/Session.tsx");
-    
+
     const isLoaderOrAction = file.includes("/loaders/") || file.includes("/actions/");
 
     return !usedSections.has(file) &&
@@ -1340,12 +1348,35 @@ async function removeUnusedSectionFiles(
       !isLoaderOrAction;
   });
 
+  // Now also include loaders/actions that are candidates, but check imports
+  const allCandidates = allSectionFiles.filter((file) => {
+    const isSpecialSection = file.includes("/sections/Theme/") ||
+      file.endsWith("/sections/Component.tsx") ||
+      file.endsWith("/sections/Session.tsx");
+
+    return !usedSections.has(file) && !isSpecialSection;
+  });
+
+  // Filter out files that are imported in code
+  const { unused: toRemove, imported: importedButNotInBlocks } = filterImportedFiles(
+    allCandidates,
+    importAnalysis.importedFiles,
+    projectRoot,
+  );
+
+  if (importedButNotInBlocks.length > 0) {
+    console.log("\n⚠️  Files imported in code (will NOT be deleted):");
+    for (const file of importedButNotInBlocks) {
+      const relPath = relative(projectRoot, file);
+      console.log(`   ✓ ${relPath}`);
+    }
+    console.log("");
+  }
+
   if (toRemove.length === 0) {
     console.log("✅ No unused sections found\n");
     return;
   }
-
-  const projectRoot = Deno.cwd();
 
   console.log(`📋 ${toRemove.length} file(s) will be removed:\n`);
   for (const file of toRemove) {
