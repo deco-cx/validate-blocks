@@ -16,6 +16,44 @@ The tool detects several types of unused code:
 
 *Loaders and actions are not auto-removed because they may be imported dynamically or called programmatically.
 
+### Smart Import Analysis
+
+When using `-rm-sections`, the tool performs **import analysis** to avoid false positives:
+
+1. Scans all TypeScript files in the project for import statements
+2. Identifies files that are imported in code (e.g., `import { helper } from "site/sections/Utils/Helper.tsx"`)
+3. Excludes imported files from the removal list, even if they don't appear in block configurations
+
+This prevents accidentally deleting utility sections or helper files that are used programmatically.
+
+## Anti-Pattern Detection
+
+The tool automatically detects common anti-patterns in block configurations:
+
+| Anti-Pattern | Description | Impact |
+|--------------|-------------|--------|
+| **Dead Code** | Variants with `never` matcher rule | Code that will never execute |
+| **Lazy wrapping Multivariate** | `Lazy` section containing a `multivariate` inside | Performance issue - multivariate should wrap Lazy, not the other way around |
+
+### Example Output
+
+```
+🚨 ANTI-PATTERNS DETECTED
+
+💀 Dead Code (3 sections with 'never' rule):
+
+   📄 pages-Home-287364.json: 2 dead code section(s)
+   📄 pages-category-7493d4.json: 1 dead code section(s)
+
+⚠️  Lazy wrapping Multivariate (1 instances):
+
+   📄 pages-productpage-ce4850.json
+      Path: sections[5].value
+      Lazy wrapping multivariate is an anti-pattern. Multivariate should wrap Lazy, not the other way around.
+```
+
+Anti-pattern counts are included in the validation report when using `-report`.
+
 ## How to Run
 
 ### Run directly (recommended)
@@ -207,10 +245,17 @@ The script:
 - ✅ Ignores Theme blocks
 - ✅ Protection against infinite recursion in circular types
 
+### Anti-Pattern Detection
+
+- ✅ Detects **dead code** (variants with `never` matcher)
+- ✅ Detects **Lazy wrapping Multivariate** (should be inverted)
+- ✅ Reports anti-patterns in summary and JSON report
+
 ### Severity System
 
 - **✅ Valid** - Block is correct
 - **⚠️ Warning** - Props not found OR extra properties not defined in types OR section is not being used (doesn't fail the build)
+- **🚨 Anti-pattern** - Configuration issues that may cause performance problems or dead code
 - **❌ Error** - Required properties missing or incorrect types (fails the build)
 
 #### `-report [path]` or `-r [path]`
