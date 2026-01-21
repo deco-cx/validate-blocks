@@ -26,24 +26,44 @@ When using `-rm-sections`, the tool performs **import analysis** to avoid false 
 
 This prevents accidentally deleting utility sections or helper files that are used programmatically.
 
-## Anti-Pattern Detection
+## Issue Detection
 
-The tool automatically detects common anti-patterns in block configurations:
+The tool automatically detects common issues in block configurations:
 
-| Anti-Pattern | Description | Impact |
-|--------------|-------------|--------|
-| **Dead Code** | Variants with `never` matcher rule | Code that will never execute |
+| Issue | Description | Action |
+|-------|-------------|--------|
+| **Disabled Variants** | Variants with `never` matcher rule | ⚠️ **DO NOT DELETE** - These are intentionally disabled content |
 | **Lazy wrapping Multivariate** | `Lazy` section containing a `multivariate` inside | Performance issue - multivariate should wrap Lazy, not the other way around |
+
+### ⚠️ Important: Disabled Variants are NOT Dead Code
+
+Variants with a `never` matcher are **intentionally disabled content**, not dead code. Common uses include:
+
+- **Seasonal campaigns** (Black Friday, Christmas, Back to School, etc.)
+- **A/B test variants** that are temporarily paused
+- **Content templates** preserved for future campaigns
+- **Historical content** kept for reference
+
+**Never automatically delete these!** They can be reactivated by simply changing the matcher rule.
 
 ### Example Output
 
 ```
-🚨 ANTI-PATTERNS DETECTED
+🚨 ISSUES DETECTED
 
-💀 Dead Code (3 sections with 'never' rule):
+⏸️  Disabled Variants (3 sections with 'never' matcher):
 
-   📄 pages-Home-287364.json: 2 dead code section(s)
-   📄 pages-category-7493d4.json: 1 dead code section(s)
+   ╔════════════════════════════════════════════════════════════════════╗
+   ║  ⚠️  WARNING: These are NOT dead code! DO NOT DELETE!              ║
+   ║  These are intentionally disabled campaigns/content that can be    ║
+   ║  reactivated by changing the matcher. Common uses:                 ║
+   ║  • Seasonal campaigns (Black Friday, Christmas, etc.)              ║
+   ║  • A/B test variants that are paused                               ║
+   ║  • Content templates for future campaigns                          ║
+   ╚════════════════════════════════════════════════════════════════════╝
+
+   📄 pages-Home-287364.json: 2 disabled variant(s)
+   📄 pages-category-7493d4.json: 1 disabled variant(s)
 
 ⚠️  Lazy wrapping Multivariate (1 instances):
 
@@ -52,7 +72,7 @@ The tool automatically detects common anti-patterns in block configurations:
       Lazy wrapping multivariate is an anti-pattern. Multivariate should wrap Lazy, not the other way around.
 ```
 
-Anti-pattern counts are included in the validation report when using `-report`.
+Issue counts are included in the validation report when using `-report`.
 
 ## How to Run
 

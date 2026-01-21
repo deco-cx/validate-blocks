@@ -72,7 +72,7 @@ interface ValidationReport {
 }
 
 interface AntiPatternIssue {
-  type: "dead-code" | "lazy-multivariate" | "nested-multivariate";
+  type: "disabled-variant" | "lazy-multivariate" | "nested-multivariate";
   jsonFile: string;
   jsonPath: string;
   message: string;
@@ -630,7 +630,9 @@ function scanForAntiPatterns(
         const rule = variant.rule as Record<string, unknown>;
         const value = variant.value;
 
-        // Check for 'never' matcher (dead code)
+        // Check for 'never' matcher (disabled variant - NOT dead code!)
+        // IMPORTANT: These are typically intentionally disabled campaigns/content
+        // that should be preserved for future reactivation, NOT deleted.
         if (
           rule &&
           typeof rule.__resolveType === "string" &&
@@ -638,10 +640,10 @@ function scanForAntiPatterns(
         ) {
           const line = findPatternLine(jsonContent, "never", currentPath);
           issues.push({
-            type: "dead-code",
+            type: "disabled-variant",
             jsonFile,
             jsonPath: `${currentPath}.variants[${i}]`,
-            message: `Variant with 'never' rule is dead code and will never execute`,
+            message: `Variant with 'never' matcher is DISABLED (not dead code). This is likely an intentionally disabled campaign/content preserved for future use. DO NOT DELETE.`,
             line,
           });
         }
@@ -926,10 +928,10 @@ function reportResults(
 
   // Report anti-patterns
   if (antiPatterns.length > 0) {
-    console.log("\n🚨 ANTI-PATTERNS DETECTED\n");
+    console.log("\n🚨 ISSUES DETECTED\n");
 
     // Group by type
-    const deadCode = antiPatterns.filter((p) => p.type === "dead-code");
+    const disabledVariants = antiPatterns.filter((p) => p.type === "disabled-variant");
     const lazyMultivariate = antiPatterns.filter(
       (p) => p.type === "lazy-multivariate",
     );
@@ -937,18 +939,26 @@ function reportResults(
       (p) => p.type === "nested-multivariate",
     );
 
-    if (deadCode.length > 0) {
-      console.log(`💀 Dead Code (${deadCode.length} sections with 'never' rule):\n`);
+    if (disabledVariants.length > 0) {
+      console.log(`⏸️  Disabled Variants (${disabledVariants.length} sections with 'never' matcher):\n`);
+      console.log(`   ╔════════════════════════════════════════════════════════════════════╗`);
+      console.log(`   ║  ⚠️  WARNING: These are NOT dead code! DO NOT DELETE!              ║`);
+      console.log(`   ║  These are intentionally disabled campaigns/content that can be    ║`);
+      console.log(`   ║  reactivated by changing the matcher. Common uses:                 ║`);
+      console.log(`   ║  • Seasonal campaigns (Black Friday, Christmas, etc.)              ║`);
+      console.log(`   ║  • A/B test variants that are paused                               ║`);
+      console.log(`   ║  • Content templates for future campaigns                          ║`);
+      console.log(`   ╚════════════════════════════════════════════════════════════════════╝\n`);
       // Group by file
       const byFile = new Map<string, AntiPatternIssue[]>();
-      for (const issue of deadCode) {
+      for (const issue of disabledVariants) {
         if (!byFile.has(issue.jsonFile)) {
           byFile.set(issue.jsonFile, []);
         }
         byFile.get(issue.jsonFile)!.push(issue);
       }
       for (const [file, issues] of byFile) {
-        console.log(`   📄 ${file}: ${issues.length} dead code section(s)`);
+        console.log(`   📄 ${file}: ${issues.length} disabled variant(s)`);
       }
       console.log();
     }
